@@ -1127,12 +1127,10 @@
     padding: 16px;
     text-align:center;
   }
-  #barcode-scanner-reader{
-    border-radius: 12px;
-    overflow: hidden;
-    background:#000;
+  #barcode-video{
+    width:100%; border-radius: 12px; background:#000; display:block;
+    aspect-ratio: 4/3; object-fit: cover;
   }
-  #barcode-scanner-reader video{ border-radius: 12px; }
   .barcode-scanner-hint{
     color: #fff; font-size: 13px; margin-top: 12px; opacity:.85;
   }
@@ -1269,12 +1267,17 @@
 
 <div class="barcode-scanner-overlay" id="barcode-scanner-overlay" style="display:none;">
   <div class="barcode-scanner-card">
-    <div id="barcode-scanner-reader"></div>
-    <div class="barcode-scanner-hint" id="barcode-scanner-hint">Point your camera at the barcode</div>
-    <button class="btn btn-ghost btn-block" style="margin-top:12px;" onclick="closeBarcodeScanner()">Cancel</button>
+    <video id="barcode-video" autoplay playsinline muted></video>
+    <div class="barcode-scanner-hint">Line up the barcode, then tap Capture</div>
+    <button class="btn btn-primary btn-block" style="margin-top:12px;" onclick="captureBarcodePhoto()">📸 Capture</button>
+    <button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="closeBarcodeScanner()">Cancel</button>
   </div>
 </div>
-<input type="file" id="barcode-file-input" accept="image/*" capture="environment" style="display:none;" onchange="handleBarcodeFileChosen(event)">
+<input type="file" id="barcode-file-input" accept="image/*" style="display:none;" onchange="handleBarcodeFileChosen(event)">
+<!-- html5-qrcode's scanFile() needs a container with real layout size to
+     work — display:none collapses it to zero and silently breaks
+     decoding, so this stays off-screen via position instead. -->
+<div id="barcode-decode-container" style="position:fixed; left:-9999px; top:0; width:300px; height:300px;"></div>
 
 <div class="toast" id="toast"></div>
 
@@ -4027,48 +4030,63 @@ function lockedToolToast(){
 // website. Limited to the retail barcode formats actually printed on food
 // packaging (UPC/EAN) rather than also matching QR/Data Matrix/etc, which
 // keeps scanning faster and avoids false-positive matches.
+//
+// Deliberately NOT using html5-qrcode's continuous auto-scan mode
+// (Html5Qrcode.start() with a live decode callback) — that mode has no
+// capture button by design, it just silently keeps trying every frame
+// until it finds a match, which is confusing if detection doesn't fire
+// right away. Instead: a real live preview via getUserMedia, a manual
+// Capture button, then decode that one still frame — both the live-
+// capture path and "Choose photo" end up sharing the exact same decode
+// function below.
 // ---------------------------------------------------------------------
 const BARCODE_FORMATS = [
   Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E,
   Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8
 ];
-let barcodeScannerInstance = null;
+let barcodeStream = null;
 let barcodeScanGoalId = null;
 
 function openBarcodeScanner(goalId){
   barcodeScanGoalId = goalId;
-  document.getElementById('barcode-scanner-hint').textContent = 'Point your camera at the barcode';
   document.getElementById('barcode-scanner-overlay').style.display = 'flex';
-  barcodeScannerInstance = new Html5Qrcode('barcode-scanner-reader', { formatsToSupport: BARCODE_FORMATS, verbose: false });
-  barcodeScannerInstance.start(
-    { facingMode: 'environment' },
-    { fps: 10, qrbox: { width: 260, height: 140 } },
-    (decodedText) => {
-      const input = document.getElementById('barcode-input-'+barcodeScanGoalId);
-      if(input) input.value = decodedText;
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+    .then(stream => {
+      barcodeStream = stream;
+      document.getElementById('barcode-video').srcObject = stream;
+    })
+    .catch(() => {
       closeBarcodeScanner();
-      lookupBarcode(barcodeScanGoalId);
-    },
-    () => { /* fires constantly while no barcode is in frame yet — not an error */ }
-  ).catch(() => {
-    closeBarcodeScanner();
-    showToast("Couldn't access the camera — check camera permissions, or type the barcode manually");
-  });
+      showToast("Couldn't access the camera — check camera permissions, or type the barcode manually");
+    });
 }
 function closeBarcodeScanner(){
   document.getElementById('barcode-scanner-overlay').style.display = 'none';
-  if(barcodeScannerInstance){
-    const instance = barcodeScannerInstance;
-    barcodeScannerInstance = null;
-    // Always release the camera stream, whether scanning was still active
-    // or already stopped — leaving it running in the background after the
-    // overlay closes would be a real privacy/battery problem.
-    instance.stop().then(() => instance.clear()).catch(() => {});
+  if(barcodeStream){
+    // Always release the camera stream — leaving it running in the
+    // background after the overlay closes would be a real privacy/battery
+    // problem, not just a cosmetic one.
+    barcodeStream.getTracks().forEach(t => t.stop());
+    barcodeStream = null;
   }
 }
-// "Choose photo" — picks or takes a single photo (not a live feed) and
-// decodes any barcode found in it. Useful when the live camera struggles
-// with glare or a curved package surface.
+function captureBarcodePhoto(){
+  const video = document.getElementById('barcode-video');
+  if(!video.videoWidth){ showToast('Camera still loading — give it a second and try again'); return; }
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+  canvas.toBlob(blob => {
+    if(!blob){ showToast("Couldn't capture that — try again"); return; }
+    const goalId = barcodeScanGoalId;
+    closeBarcodeScanner();
+    decodeBarcodeImage(new File([blob], 'barcode.jpg', { type: 'image/jpeg' }), goalId);
+  }, 'image/jpeg', 0.92);
+}
+// "Choose photo" — picks or takes a single photo via the device's native
+// picker (not our own live preview) and decodes any barcode found in it.
+// Useful when the live camera struggles with glare or a curved surface.
 function pickBarcodePhoto(goalId){
   barcodeScanGoalId = goalId;
   document.getElementById('barcode-file-input').click();
@@ -4077,9 +4095,17 @@ function handleBarcodeFileChosen(event){
   const file = event.target.files[0];
   event.target.value = ''; // allow choosing the same file again later
   if(!file || !barcodeScanGoalId) return;
-  const goalId = barcodeScanGoalId;
-  showToast('Reading barcode from photo…');
-  const scanner = new Html5Qrcode('barcode-scanner-reader', { formatsToSupport: BARCODE_FORMATS, verbose: false });
+  decodeBarcodeImage(file, barcodeScanGoalId);
+}
+// Shared by both paths above. Runs against #barcode-decode-container,
+// which stays off-screen via positioning (not display:none) specifically
+// because html5-qrcode's scanFile() needs a container with real layout
+// dimensions to work — a display:none container collapses to zero size
+// and silently breaks decoding regardless of how good the photo is, which
+// was the actual bug behind "Choose photo never comes back with anything."
+function decodeBarcodeImage(file, goalId){
+  showToast('Reading barcode…');
+  const scanner = new Html5Qrcode('barcode-decode-container', { formatsToSupport: BARCODE_FORMATS, verbose: false });
   scanner.scanFile(file, false)
     .then((decodedText) => {
       const input = document.getElementById('barcode-input-'+goalId);
@@ -4087,7 +4113,7 @@ function handleBarcodeFileChosen(event){
       lookupBarcode(goalId);
     })
     .catch(() => {
-      showToast("Couldn't find a barcode in that photo — try again or type it manually");
+      showToast("Couldn't find a barcode in that photo — try holding it steadier/closer, or type it manually");
     });
 }
 function calcCaloriesFromMacros(p, f, c){ return Math.round((p*4) + (f*9) + (c*4)); }
