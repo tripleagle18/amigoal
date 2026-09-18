@@ -1131,6 +1131,13 @@
     width:100%; border-radius: 12px; background:#000; display:block;
     aspect-ratio: 4/3; object-fit: cover;
   }
+  .barcode-aim-box{
+    position:absolute; left:11%; right:11%; top:33%; bottom:33%;
+    border: 2px solid var(--green-light);
+    border-radius: 8px;
+    box-shadow: 0 0 0 999px rgba(0,0,0,.35);
+    pointer-events:none;
+  }
   .barcode-scanner-hint{
     color: #fff; font-size: 13px; margin-top: 12px; opacity:.85;
   }
@@ -1267,7 +1274,10 @@
 
 <div class="barcode-scanner-overlay" id="barcode-scanner-overlay" style="display:none;">
   <div class="barcode-scanner-card">
-    <video id="barcode-video" autoplay playsinline muted></video>
+    <div style="position:relative;">
+      <video id="barcode-video" autoplay playsinline muted></video>
+      <div class="barcode-aim-box"></div>
+    </div>
     <div class="barcode-scanner-hint">Line up the barcode, then tap Capture</div>
     <button class="btn btn-primary btn-block" style="margin-top:12px;" onclick="captureBarcodePhoto()">📸 Capture</button>
     <button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="closeBarcodeScanner()">Cancel</button>
@@ -4050,7 +4060,9 @@ let barcodeScanGoalId = null;
 function openBarcodeScanner(goalId){
   barcodeScanGoalId = goalId;
   document.getElementById('barcode-scanner-overlay').style.display = 'flex';
-  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+  navigator.mediaDevices.getUserMedia({
+    video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+  })
     .then(stream => {
       barcodeStream = stream;
       document.getElementById('barcode-video').srcObject = stream;
@@ -4070,19 +4082,44 @@ function closeBarcodeScanner(){
     barcodeStream = null;
   }
 }
+// Decoding the ENTIRE captured frame (background included) turned out to
+// fail far more often than it should — the barcode only occupies a small
+// fraction of a full-width photo taken at a normal arm's-length distance.
+// So this crops to the aim-box region first (matching what's outlined on
+// screen), which gives the decoder a much larger, more detailed view of
+// just the barcode — and only falls back to the full uncropped frame if
+// that tighter crop comes up empty, in case the barcode wasn't perfectly
+// centered.
 function captureBarcodePhoto(){
   const video = document.getElementById('barcode-video');
   if(!video.videoWidth){ showToast('Camera still loading — give it a second and try again'); return; }
-  const canvas = document.createElement('canvas');
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  canvas.getContext('2d').drawImage(video, 0, 0);
-  canvas.toBlob(blob => {
-    if(!blob){ showToast("Couldn't capture that — try again"); return; }
-    const goalId = barcodeScanGoalId;
-    closeBarcodeScanner();
-    decodeBarcodeImage(new File([blob], 'barcode.jpg', { type: 'image/jpeg' }), goalId);
-  }, 'image/jpeg', 0.92);
+  const goalId = barcodeScanGoalId;
+
+  const fullCanvas = document.createElement('canvas');
+  fullCanvas.width = video.videoWidth;
+  fullCanvas.height = video.videoHeight;
+  fullCanvas.getContext('2d').drawImage(video, 0, 0);
+
+  const cropW = video.videoWidth * 0.78;
+  const cropH = video.videoHeight * 0.34;
+  const cropX = (video.videoWidth - cropW) / 2;
+  const cropY = (video.videoHeight - cropH) / 2;
+  const cropCanvas = document.createElement('canvas');
+  cropCanvas.width = cropW;
+  cropCanvas.height = cropH;
+  cropCanvas.getContext('2d').drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+  closeBarcodeScanner();
+
+  cropCanvas.toBlob(cropBlob => {
+    const cropFile = new File([cropBlob], 'barcode-crop.jpg', { type: 'image/jpeg' });
+    decodeBarcodeImage(cropFile, goalId, false, () => {
+      fullCanvas.toBlob(fullBlob => {
+        const fullFile = new File([fullBlob], 'barcode-full.jpg', { type: 'image/jpeg' });
+        decodeBarcodeImage(fullFile, goalId, true, null);
+      }, 'image/jpeg', 0.92);
+    });
+  }, 'image/jpeg', 0.95);
 }
 // "Choose photo" — picks or takes a single photo via the device's native
 // picker (not our own live preview) and decodes any barcode found in it.
@@ -4095,16 +4132,20 @@ function handleBarcodeFileChosen(event){
   const file = event.target.files[0];
   event.target.value = ''; // allow choosing the same file again later
   if(!file || !barcodeScanGoalId) return;
-  decodeBarcodeImage(file, barcodeScanGoalId);
+  decodeBarcodeImage(file, barcodeScanGoalId, false, null);
 }
-// Shared by both paths above. Runs against #barcode-decode-container,
+// Shared by every path above. Runs against #barcode-decode-container,
 // which stays off-screen via positioning (not display:none) specifically
 // because html5-qrcode's scanFile() needs a container with real layout
 // dimensions to work — a display:none container collapses to zero size
 // and silently breaks decoding regardless of how good the photo is, which
 // was the actual bug behind "Choose photo never comes back with anything."
-function decodeBarcodeImage(file, goalId){
-  showToast('Reading barcode…');
+// `quiet` skips the "Reading barcode…" toast (used for the silent full-
+// frame fallback attempt, so it doesn't flash a second redundant toast).
+// `onFail` lets a caller chain a fallback attempt instead of showing the
+// final error immediately.
+function decodeBarcodeImage(file, goalId, quiet, onFail){
+  if(!quiet) showToast('Reading barcode…');
   const scanner = new Html5Qrcode('barcode-decode-container', { formatsToSupport: BARCODE_FORMATS, verbose: false });
   scanner.scanFile(file, false)
     .then((decodedText) => {
@@ -4113,7 +4154,8 @@ function decodeBarcodeImage(file, goalId){
       lookupBarcode(goalId);
     })
     .catch(() => {
-      showToast("Couldn't find a barcode in that photo — try holding it steadier/closer, or type it manually");
+      if(onFail) onFail();
+      else showToast("Couldn't find a barcode in that photo — try holding it steadier/closer/more in focus, or type it manually");
     });
 }
 function calcCaloriesFromMacros(p, f, c){ return Math.round((p*4) + (f*9) + (c*4)); }
