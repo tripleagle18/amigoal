@@ -1223,7 +1223,7 @@
 </head>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script src="https://fastly.jsdelivr.net/npm/barcode-detector@3/dist/iife/polyfill.min.js"></script>
 <body>
 
 <div class="shell">
@@ -4029,29 +4029,32 @@ function lockedToolToast(){
   showToast('Not connected yet — this needs a secure backend AI call');
 }
 // ---------------------------------------------------------------------
-// BARCODE SCANNING — real camera + photo-file scanning via ZXing.
-// Was a stub ("needs the native app") back when this only ran inside
-// Claude's sandbox, which blocks camera access entirely; now that it's a
-// normal HTTPS site, real getUserMedia camera access works like any other
-// website.
+// BARCODE SCANNING — real camera + photo-file scanning via the
+// barcode-detector polyfill (ZXing-C++ compiled to WebAssembly). Was a
+// stub ("needs the native app") back when this only ran inside Claude's
+// sandbox, which blocks camera access entirely; now that it's a normal
+// HTTPS site, real getUserMedia camera access works like any other website.
 //
-// Previously built on html5-qrcode, which kept internal canvas state
-// inside a persistent container div between calls — every attempt after
-// the very first was reusing a container still cluttered with the last
-// scan's leftovers, which is exactly why only the first scan ever worked,
-// even after adding the library's own documented clear() cleanup step.
-// Rebuilt on ZXing instead: decodeFromCanvas() takes a canvas directly and
-// returns a result with no shared container and nothing left behind
-// between calls — there's no reused state left to corrupt.
+// Went through two prior JS-only libraries before this one:
+//   1. html5-qrcode kept internal canvas state inside a persistent
+//      container div between calls — every attempt after the first was
+//      reusing a container still cluttered with the last scan's leftovers,
+//      which is why only the first scan ever worked, even after adding
+//      the library's own documented clear() cleanup step.
+//   2. @zxing/library (the pure-JS port) fixed that specific bug, but got
+//      loaded from a CDN path that silently didn't define its global at
+//      all, so nothing ran, ever.
+// This library implements the browser's own standard BarcodeDetector API
+// (detect() takes a canvas/image, returns results — no persistent
+// container, nothing shared between calls to ever corrupt) using the
+// actual C++ reference decoder compiled to WebAssembly rather than a pure-
+// JS port, which is both more accurate and works on Safari/iOS, where the
+// real native BarcodeDetector still isn't supported as of this build.
 //
 // Manual Capture button (not continuous auto-scan) so there's always a
 // clear, visible action rather than silently retrying every frame forever.
 // ---------------------------------------------------------------------
-const BARCODE_HINTS = new Map();
-BARCODE_HINTS.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-  ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E,
-  ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8
-]);
+const BARCODE_FORMATS = ['upc_a', 'upc_e', 'ean_13', 'ean_8'];
 let barcodeStream = null;
 let barcodeScanGoalId = null;
 
@@ -4136,8 +4139,8 @@ function handleBarcodeFileChosen(event){
   img.onerror = () => showToast("Couldn't open that photo — try a different one, or type the barcode manually");
   img.src = URL.createObjectURL(file);
 }
-// Shared by every path above. A fresh ZXing.BrowserMultiFormatReader per
-// call, decoding directly from an in-memory canvas — no DOM container to
+// Shared by every path above. A fresh BarcodeDetector instance per call,
+// decoding directly from an in-memory canvas — no DOM container to
 // manage, nothing persists between calls, so there's no shared state one
 // scan could leave behind to break the next one.
 // `quiet` skips the "Reading barcode…" toast (used for the silent full-
@@ -4145,16 +4148,17 @@ function handleBarcodeFileChosen(event){
 // `onFail` lets a caller chain a fallback attempt instead of showing the
 // final error immediately.
 function decodeCanvasForBarcode(canvas, goalId, quiet, onFail){
-  if(typeof ZXing === 'undefined'){
+  if(typeof BarcodeDetector === 'undefined'){
     showToast("Barcode scanner failed to load — check your connection and reopen the app, or type the barcode manually");
     return;
   }
   if(!quiet) showToast('Reading barcode…');
-  const reader = new ZXing.BrowserMultiFormatReader(BARCODE_HINTS);
-  reader.decodeFromCanvas(canvas)
-    .then((result) => {
+  const detector = new BarcodeDetector({ formats: BARCODE_FORMATS });
+  detector.detect(canvas)
+    .then((results) => {
+      if(!results || !results.length) throw new Error('no barcode found');
       const input = document.getElementById('barcode-input-'+goalId);
-      if(input) input.value = result.getText();
+      if(input) input.value = results[0].rawValue;
       lookupBarcode(goalId);
     })
     .catch(() => {
