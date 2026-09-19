@@ -1223,7 +1223,7 @@
 </head>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.23.0"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 <body>
 
 <div class="shell">
@@ -4145,6 +4145,10 @@ function handleBarcodeFileChosen(event){
 // `onFail` lets a caller chain a fallback attempt instead of showing the
 // final error immediately.
 function decodeCanvasForBarcode(canvas, goalId, quiet, onFail){
+  if(typeof ZXing === 'undefined'){
+    showToast("Barcode scanner failed to load — check your connection and reopen the app, or type the barcode manually");
+    return;
+  }
   if(!quiet) showToast('Reading barcode…');
   const reader = new ZXing.BrowserMultiFormatReader(BARCODE_HINTS);
   reader.decodeFromCanvas(canvas)
