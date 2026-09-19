@@ -4149,13 +4149,21 @@ function decodeBarcodeImage(file, goalId, quiet, onFail){
   const scanner = new Html5Qrcode('barcode-decode-container', { formatsToSupport: BARCODE_FORMATS, verbose: false });
   scanner.scanFile(file, false)
     .then((decodedText) => {
-      const input = document.getElementById('barcode-input-'+goalId);
-      if(input) input.value = decodedText;
-      lookupBarcode(goalId);
+      // clear() releases the canvas state scanFile() leaves behind in the
+      // container — without this, every scan after the first was reusing
+      // a container still cluttered with the previous attempt's leftovers,
+      // which is exactly why only the very first scan ever worked.
+      scanner.clear().finally(() => {
+        const input = document.getElementById('barcode-input-'+goalId);
+        if(input) input.value = decodedText;
+        lookupBarcode(goalId);
+      });
     })
     .catch(() => {
-      if(onFail) onFail();
-      else showToast("Couldn't find a barcode in that photo — try holding it steadier/closer/more in focus, or type it manually");
+      scanner.clear().finally(() => {
+        if(onFail) onFail();
+        else showToast("Couldn't find a barcode in that photo — try holding it steadier/closer/more in focus, or type it manually");
+      });
     });
 }
 function calcCaloriesFromMacros(p, f, c){ return Math.round((p*4) + (f*9) + (c*4)); }
