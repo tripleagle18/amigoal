@@ -1413,18 +1413,26 @@ async function loadSupportingRelationships(){
     .eq('ab_user_id', currentUser.id)
     .eq('active', true)
     .order('created_at', { ascending: false });
-  if(error){ supporting = []; return; }
+  if(error){
+    showToast("Couldn't load who you're supporting — " + error.message);
+    supporting = [];
+    return;
+  }
   supporting = data.map(r => {
-    const clientKey = dbMetricKeyToClient(r.goal_metrics.metric_type);
+    const gm = toOne(r.goal_metrics);
+    const goal = gm ? toOne(gm.goals) : null;
+    const owner = goal ? toOne(goal.users) : null;
+    if(!gm || !goal || !owner) return null;
+    const clientKey = dbMetricKeyToClient(gm.metric_type);
     return {
       relationshipId: r.id,
       connectedSince: r.created_at,
-      goalLabel: r.goal_metrics.goals.label,
-      category: r.goal_metrics.goals.category,
+      goalLabel: goal.label,
+      category: goal.category,
       metricLabel: METRIC_FIXED_LABEL[clientKey] || null,
-      ownerName: r.goal_metrics.goals.users.display_name
+      ownerName: owner.display_name
     };
-  });
+  }).filter(Boolean);
 }
 
 // The other side of the same relationship: who I've invited to support MY
@@ -1436,6 +1444,13 @@ async function loadSupportingRelationships(){
 // no way to sync back except by asking the real database, which is what
 // this does instead.
 let myAbInvites = [];
+// PostgREST can embed a to-one relation (child references parent via a
+// plain foreign key) as either a single object or a one-item array
+// depending on how it infers the relationship — already caught this once
+// with nutrition_profiles. Applying the same defensive handling here
+// rather than assuming a shape.
+function toOne(x){ return Array.isArray(x) ? x[0] : x; }
+
 async function loadMyAbInvites(){
   if(!currentUser){ myAbInvites = []; return; }
   const { data, error } = await sbClient
@@ -1443,16 +1458,25 @@ async function loadMyAbInvites(){
     .select('id, first_name, last_name, status, sent_at, goal_metrics(metric_type, goals(id, label))')
     .eq('inviter_user_id', currentUser.id)
     .order('sent_at', { ascending: false });
-  if(error){ myAbInvites = []; return; }
+  if(error){
+    showToast("Couldn't load your Accountability Buddy invites — " + error.message);
+    myAbInvites = [];
+    return;
+  }
   myAbInvites = data
-    .filter(r => r.goal_metrics && r.goal_metrics.goals) // guards against an orphaned invite if its goal was ever deleted
-    .map(r => ({
-      inviteId: r.id,
-      firstName: r.first_name, lastName: r.last_name,
-      status: r.status, sentAt: r.sent_at,
-      goalId: r.goal_metrics.goals.id, goalLabel: r.goal_metrics.goals.label,
-      metricKey: dbMetricKeyToClient(r.goal_metrics.metric_type)
-    }));
+    .map(r => {
+      const gm = toOne(r.goal_metrics);
+      const goal = gm ? toOne(gm.goals) : null;
+      if(!gm || !goal) return null; // orphaned invite (its goal was deleted) or an unreadable row
+      return {
+        inviteId: r.id,
+        firstName: r.first_name, lastName: r.last_name,
+        status: r.status, sentAt: r.sent_at,
+        goalId: goal.id, goalLabel: goal.label,
+        metricKey: dbMetricKeyToClient(gm.metric_type)
+      };
+    })
+    .filter(Boolean);
 }
 
 function loadNotifications(){
