@@ -593,7 +593,7 @@
     color: var(--muted);
     font-size: 11.5px;
     font-weight: 600;
-    padding: 4px 18px;
+    padding: 4px 8px;
     min-height: 44px;
   }
   .nav-item.active{ color: var(--green-deep); }
@@ -718,6 +718,40 @@
   .stat-ab-empty{
     font-size: 12.5px; color: var(--muted); line-height:1.5; padding: 8px 0;
   }
+
+  /* CHALLENGES */
+  .challenge-card-emoji{ font-size: 32px; line-height:1; }
+  .leaderboard-row{
+    display:flex; align-items:center; gap: 12px;
+    padding: 12px 4px; border-bottom: 1px solid var(--line);
+  }
+  .leaderboard-row:last-child{ border-bottom:none; }
+  .leaderboard-row.is-me{ background: var(--paper); border-radius: 10px; padding-left: 10px; padding-right: 10px; }
+  .leaderboard-rank{
+    width: 28px; text-align:center; font-family:'Poppins',sans-serif; font-weight:800; font-size: 15px; color: var(--muted); flex-shrink:0;
+  }
+  .leaderboard-rank.medal{ font-size: 20px; }
+  .leaderboard-name{ flex:1; font-size: 14.5px; font-weight:700; color: var(--ink); min-width:0; }
+  .leaderboard-name .you-tag{ font-size:11.5px; font-weight:600; color: var(--green-deep); margin-left:4px; }
+  .leaderboard-points{ font-family:'Poppins',sans-serif; font-weight:800; font-size: 17px; color: var(--navy); flex-shrink:0; }
+  .leaderboard-points-label{ font-size: 10.5px; font-weight:600; color: var(--muted); display:block; text-align:right; }
+  .challenge-meta-row{
+    display:flex; justify-content:space-between; align-items:center;
+    background: var(--paper); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px;
+    font-size: 13px; color: var(--muted);
+  }
+  .challenge-meta-row strong{ color: var(--ink); }
+  .points-key{
+    font-size: 11.5px; color: var(--muted); line-height:1.6; background: var(--paper);
+    border-radius: 10px; padding: 10px 12px; margin-bottom: 16px;
+  }
+  .log-today-box{
+    border: 1.5px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 18px;
+  }
+  .log-today-box h4{ font-size: 13.5px; margin-bottom: 8px; color: var(--navy); }
+  .log-today-row{ display:flex; gap: 8px; }
+  .log-today-row input{ flex:1; }
+  .invite-chip-list{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom: 10px; }
 
   .weight-history-empty{
     text-align:center;
@@ -1520,6 +1554,54 @@ async function loadMyAbInvites(){
     .filter(Boolean);
 }
 
+// ---------------------------------------------------------------------
+// CHALLENGES — the competitive counterpart to private goals. Separate
+// tables entirely (see the challenges_schema migration): a leaderboard
+// needs every participant to see every other participant's progress,
+// which a private goal's RLS was never built to allow.
+// ---------------------------------------------------------------------
+let myChallenges = [];
+let pendingAcceptChallengeToken = new URLSearchParams(window.location.search).get('accept_challenge_invite');
+let currentChallengeId = null;
+let challengeDraft = null;
+
+async function loadChallenges(){
+  if(!currentUser){ myChallenges = []; return; }
+  const { data, error } = await sbClient
+    .from('challenges')
+    .select('*, challenge_participants(user_id, joined_at, active, users(display_name)), challenge_logs(user_id, log_date, value, slipped), challenge_invites(id, first_name, last_name, status, contact_type)')
+    .order('created_at', { ascending: false });
+  if(error){
+    showToast("Couldn't load challenges — " + error.message);
+    myChallenges = [];
+    return;
+  }
+  myChallenges = data.map(dbChallengeToClient);
+}
+function dbChallengeToClient(row){
+  const participants = (row.challenge_participants || [])
+    .filter(p => p.active)
+    .map(p => ({ userId: p.user_id, displayName: (toOne(p.users) || {}).display_name || 'Someone', joinedAt: p.joined_at }));
+  const logs = (row.challenge_logs || []).map(l => ({ userId: l.user_id, date: l.log_date, value: l.value, slipped: l.slipped }));
+  const invites = (row.challenge_invites || []).map(i => ({ id: i.id, firstName: i.first_name, lastName: i.last_name, status: i.status, contactType: i.contact_type }));
+  return {
+    id: row.id,
+    title: row.title,
+    category: dbCategoryToClient(row.category),
+    metricKey: dbMetricKeyToClient(row.metric_type),
+    targetValue: row.target_value,
+    unit: row.unit,
+    periodLabel: dbPeriodToClient(row.period_type),
+    customDays: row.custom_period_days,
+    stepsMode: row.steps_mode,
+    startDate: row.start_date,
+    endDate: row.end_date,
+    creatorUserId: row.creator_user_id,
+    createdAt: new Date(row.created_at).getTime(),
+    participants, logs, invites
+  };
+}
+
 function loadNotifications(){
   try{
     const raw = localStorage.getItem('amigoal_notifications_demo');
@@ -1697,6 +1779,7 @@ async function processPendingInvite(){
     }
     await loadSupportingRelationships();
     await loadMyAbInvites();
+    await loadChallenges();
     openModal(`
       <div class="modal-title">You're in! 🎉</div>
       <div class="modal-desc" style="text-align:left; line-height:1.5;">
@@ -1716,17 +1799,48 @@ async function processPendingInvite(){
   }
 }
 
+// Same shape as processPendingInvite(), for the other invite type —
+// mirrors it call for call, including stripping the token from the URL
+// either way so a refresh/share doesn't re-trigger acceptance.
+async function processPendingChallengeInvite(){
+  if(!pendingAcceptChallengeToken) return;
+  const token = pendingAcceptChallengeToken;
+  pendingAcceptChallengeToken = null;
+  window.history.replaceState({}, '', window.location.pathname);
+  try{
+    const { data, error } = await sbClient.functions.invoke('accept-challenge-invite', { body: { invite_token: token } });
+    if(error || (data && data.error)){
+      showToast("Couldn't join that challenge — " + (data?.error || error.message));
+      return;
+    }
+    await loadChallenges();
+    openModal(`
+      <div class="modal-title">You're in! 🏆</div>
+      <div class="modal-desc" style="text-align:left; line-height:1.5;">
+        You've joined <strong>${data.challengeTitle}</strong>. Log your progress and climb the leaderboard any time from the <strong>Challenges</strong> tab.
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" onclick="closeModal(); render('challenges');">See the leaderboard</button>
+      </div>
+    `);
+  }catch(err){
+    showToast("Couldn't join that challenge — try the link again");
+  }
+}
+
 // Single place deciding what a person sees right after signing in, so the
 // logic can't drift out of sync between the 3 places auth can succeed
 // (existing session, fresh sign up, log in). The one rule that matters:
-// if they arrived to accept an AB invite, that IS their orientation —
-// showing the generic "set up your first goal" carousel on top of it
-// (it's a higher z-index and was completely burying the real welcome
-// screen) left brand-new ABs with no idea where they'd landed.
+// if they arrived to accept an AB or challenge invite, that IS their
+// orientation — showing the generic "set up your first goal" carousel on
+// top of it (it's a higher z-index and was completely burying the real
+// welcome screen) left brand-new ABs with no idea where they'd landed.
 function proceedAfterAuth(){
   render('dashboard');
   if(pendingAcceptToken){
     processPendingInvite();
+  } else if(pendingAcceptChallengeToken){
+    processPendingChallengeInvite();
   } else {
     maybeShowOnboarding();
   }
@@ -1739,6 +1853,7 @@ async function checkAuthAndProceed(){
     await loadGoalsFromSupabase();
     await loadSupportingRelationships();
     await loadMyAbInvites();
+    await loadChallenges();
     proceedAfterAuth();
   } else {
     showAuthScreen('login');
@@ -1747,7 +1862,8 @@ async function checkAuthAndProceed(){
 
 function showAuthScreen(mode){
   document.getElementById('auth-overlay').style.display = 'flex';
-  renderAuthCard(mode, null, pendingAcceptToken ? "You've been invited to be someone's Accountability Buddy — log in or create an account to accept." : null);
+  renderAuthCard(mode, null, pendingAcceptToken ? "You've been invited to be someone's Accountability Buddy — log in or create an account to accept."
+    : pendingAcceptChallengeToken ? "You've been invited to a challenge — log in or create an account to join." : null);
 }
 function hideAuthScreen(){
   document.getElementById('auth-overlay').style.display = 'none';
@@ -1816,6 +1932,7 @@ async function submitSignUp(){
     await loadGoalsFromSupabase();
     await loadSupportingRelationships();
     await loadMyAbInvites();
+    await loadChallenges();
     proceedAfterAuth();
   } else {
     // signUp() itself decided to withhold a session and would normally ask
@@ -1834,6 +1951,7 @@ async function submitSignUp(){
       await loadGoalsFromSupabase();
       await loadSupportingRelationships();
       await loadMyAbInvites();
+      await loadChallenges();
       proceedAfterAuth();
     } else {
       // Genuinely could not get a session — now it's a real dead end worth
@@ -1858,6 +1976,7 @@ async function submitLogIn(){
   await loadGoalsFromSupabase();
   await loadSupportingRelationships();
   await loadMyAbInvites();
+  await loadChallenges();
   proceedAfterAuth();
 }
 
@@ -2320,6 +2439,10 @@ function render(view, payload){
   else if(view === 'profile') app.innerHTML = viewProfile();
   else if(view === 'log') app.innerHTML = viewLog();
   else if(view === 'supporting') app.innerHTML = viewSupporting();
+  else if(view === 'challenges') app.innerHTML = viewChallenges();
+  else if(view === 'challenge-new') app.innerHTML = viewChallengeCategory();
+  else if(view === 'challenge-new-form') app.innerHTML = viewChallengeForm();
+  else if(view === 'challenge-detail') app.innerHTML = viewChallengeDetail();
   renderNav();
   animateCountUps();
   if(view !== lastRenderedView) window.scrollTo(0,0);
@@ -2348,7 +2471,7 @@ let currentView = 'dashboard';
 function renderNav(){
   const nav = document.getElementById('bottom-nav');
   if(!nav) return;
-  const onHome = currentView !== 'profile' && currentView !== 'log' && currentView !== 'supporting';
+  const onHome = currentView !== 'profile' && currentView !== 'log' && currentView !== 'supporting' && currentView.indexOf('challenge') !== 0;
   nav.innerHTML = `
     <button class="nav-item ${onHome?'active':''}" onclick="goHome()">
       <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><path d="M4 11.5L12 4l8 7.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 10v9a1 1 0 001 1h10a1 1 0 001-1v-9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -2357,6 +2480,10 @@ function renderNav(){
     <button class="nav-item ${currentView==='log'?'active':''}" onclick="render('log')">
       <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><rect x="5" y="4" width="14" height="16" rx="2" stroke="currentColor" stroke-width="2"/><path d="M8.5 9h7M8.5 13h7M8.5 17h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       Log
+    </button>
+    <button class="nav-item ${currentView.indexOf('challenge')===0?'active':''}" onclick="render('challenges')">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><path d="M8 21h8M12 17v4M6 4h12v3a6 6 0 01-12 0V4z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 5H3v1a4 4 0 004 4M18 5h3v1a4 4 0 01-4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Challenges
     </button>
     ${supporting.length > 0 ? `
       <button class="nav-item ${currentView==='supporting'?'active':''}" onclick="render('supporting')">
@@ -4685,6 +4812,519 @@ function profileWeightHistorySectionHtml(ng){
       <div class="weight-history-empty">Target: ${ng.targetWeight} — no weigh-ins logged yet. This chart will populate once weigh-in logging is available from the Log page.</div>
     </div>
   `;
+}
+
+// =======================================================================
+// CHALLENGES — competitive counterpart to private goals. Everyone in a
+// challenge competes on the SAME target; points are tiered (10 for
+// hitting it, 7 for 90%+, 3 for 70%+, 0 below — or 10/0 for a clean vs.
+// slipped day on an abstain challenge) and scored live, client-side, from
+// real logged data — same philosophy the rest of the app already uses
+// for streaks, not a batch job that finalizes after a period closes.
+// =======================================================================
+const NUTRITION_METRIC_UNIT = { calories:'kcal', protein:'g', fat:'g', carbs:'g', water:'fl oz' };
+
+// ---- points engine (pure — no DOM) ----
+function challengeTierPoints(pct){
+  if(pct >= 1) return 10;
+  if(pct >= 0.9) return 7;
+  if(pct >= 0.7) return 3;
+  return 0;
+}
+function challengeUserLogs(ch, userId){ return ch.logs.filter(l => l.userId === userId); }
+function getChallengePeriodWindow(ch, refDateStr){
+  return getPeriodWindow({ createdAt: parseDateKey(ch.startDate).getTime() }, { periodLabel: ch.periodLabel, customDays: ch.customDays }, refDateStr);
+}
+function challengeDailyPoints(ch, logs, dateStr){
+  if(ch.category === 'withhold'){
+    const slipped = logs.some(l => l.date === dateStr && l.slipped);
+    return slipped ? 0 : 10;
+  }
+  const val = logs.filter(l => l.date === dateStr).reduce((s,l) => s + (parseFloat(l.value)||0), 0);
+  const pct = ch.targetValue > 0 ? val / ch.targetValue : 0;
+  return challengeTierPoints(pct);
+}
+function challengePointsForUser(ch, userId){
+  const logs = challengeUserLogs(ch, userId);
+  const today = todayKey();
+  const endKey = ch.endDate < today ? ch.endDate : today;
+  if(endKey < ch.startDate) return 0;
+  const isDaily = ch.category === 'withhold' || ch.category === 'nutrition' || (ch.category === 'steps' && ch.stepsMode === 'daily');
+  if(isDaily){
+    let total = 0;
+    let cursor = parseDateKey(ch.startDate);
+    while(dateKey(cursor) <= endKey){
+      total += challengeDailyPoints(ch, logs, dateKey(cursor));
+      cursor = addDays(cursor, 1);
+    }
+    return total;
+  }
+  // period-based: steps (cumulative) or custom — bounded to 500 periods,
+  // same convention as periodTargetStreak.
+  let total = 0;
+  let cursor = parseDateKey(ch.startDate);
+  for(let i = 0; i < 500; i++){
+    const win = getChallengePeriodWindow(ch, dateKey(cursor));
+    const cappedEnd = win.end > endKey ? endKey : win.end;
+    let achieved;
+    if(ch.category === 'custom'){
+      achieved = new Set(logs.filter(l => l.date >= win.start && l.date <= cappedEnd).map(l => l.date)).size;
+    } else {
+      achieved = logs.filter(l => l.date >= win.start && l.date <= cappedEnd).reduce((s,l) => s + (parseFloat(l.value)||0), 0);
+    }
+    const pct = ch.targetValue > 0 ? achieved / ch.targetValue : 0;
+    total += challengeTierPoints(pct);
+    if(win.end >= endKey) break;
+    cursor = addDays(parseDateKey(win.end), 1);
+  }
+  return total;
+}
+function challengeLeaderboard(ch){
+  return ch.participants.map(p => Object.assign({}, p, { points: challengePointsForUser(ch, p.userId) }))
+    .sort((a,b) => b.points - a.points);
+}
+function challengeStatus(ch){
+  const today = todayKey();
+  if(today < ch.startDate) return { phase:'upcoming', days: Math.round((parseDateKey(ch.startDate)-parseDateKey(today))/86400000) };
+  if(today > ch.endDate) return { phase:'ended', days: 0 };
+  return { phase:'active', days: Math.round((parseDateKey(ch.endDate)-parseDateKey(today))/86400000) + 1 };
+}
+function challengeTargetLabel(ch){
+  if(ch.category === 'withhold') return 'No slipping — clean days win';
+  if(ch.category === 'custom') return `${ch.targetValue}x / ${periodNounFor(ch.periodLabel)}`;
+  if(ch.category === 'steps') return `${Number(ch.targetValue).toLocaleString()} steps${ch.stepsMode==='daily' ? ' / day' : ' / ' + periodNounFor(ch.periodLabel)}`;
+  return `${ch.targetValue} ${ch.unit || ''} ${METRIC_FIXED_LABEL[ch.metricKey]||''} / day`.replace(/\s+/g,' ').trim();
+}
+
+// ---- list view ----
+function startNewChallenge(){ challengeDraft = null; render('challenge-new'); }
+function viewChallenges(){
+  if(myChallenges.length === 0){
+    return `
+      <div class="empty-state" style="text-align:center;">
+        <div style="margin-bottom:18px; font-size:48px;">🏆</div>
+        <h2>Start your first challenge</h2>
+        <p style="margin-left:auto; margin-right:auto;">Invite people, pick a shared target, and see who's got the discipline to win it.</p>
+        <button class="btn btn-primary" onclick="startNewChallenge()">Create a challenge</button>
+      </div>
+    `;
+  }
+  const cards = myChallenges.map(challengeCardHtml).join('');
+  return `${cards}<button class="btn btn-ghost btn-block" onclick="startNewChallenge()" style="margin-top:8px;">Create another challenge</button>`;
+}
+function challengeCardHtml(ch){
+  const status = challengeStatus(ch);
+  const board = challengeLeaderboard(ch);
+  const meIdx = board.findIndex(p => p.userId === currentUser.id);
+  const accent = CATEGORY_ACCENT[ch.category] || 'var(--navy)';
+  const emoji = { nutrition:'🍽️', steps:'👣', custom:'✅', withhold:'🚫' }[ch.category] || '🏆';
+  const statusText = status.phase === 'upcoming' ? `Starts in ${status.days}d`
+    : status.phase === 'ended' ? 'Challenge ended'
+    : `${status.days}d left`;
+  return `
+    <div class="goal-card" style="border-left: 4px solid ${accent}; border-top-left-radius:6px; border-bottom-left-radius:6px;" onclick="openChallengeDetail(${jsAttr(ch.id)})">
+      <div class="challenge-card-emoji">${emoji}</div>
+      <div class="info">
+        <h3>${ch.title}</h3>
+        <div class="meta">${challengeTargetLabel(ch)} · ${board.length} ${board.length===1?'player':'players'}</div>
+        <div class="meta" style="margin-top:4px;">${statusText}${meIdx>=0 ? ` · You're #${meIdx+1} with ${board[meIdx].points} pts` : ''}</div>
+      </div>
+    </div>
+  `;
+}
+
+// ---- creation wizard ----
+function viewChallengeCategory(){
+  return `
+    <div class="wizard-head">
+      <div class="back-btn" onclick="render('challenges')">${chevron()}</div>
+      <div>
+        <div class="step-title">What kind of challenge?</div>
+        <div class="step-sub">Same four types as goals — everyone competes on the same target.</div>
+      </div>
+    </div>
+    <div class="category-grid">
+      <button class="category-option" onclick="pickChallengeCategory('nutrition')">
+        <div class="icon" style="background:${withOpacity(CATEGORY_ACCENT_HEX.nutrition,0.16)};">${targetGlyph()}</div>
+        <div><h3>Nutrition</h3><p>Everyone hits the same calorie, protein, fat, carb, or water target.</p></div>
+      </button>
+      <button class="category-option" onclick="pickChallengeCategory('steps')">
+        <div class="icon" style="background:${withOpacity(CATEGORY_ACCENT_HEX.steps,0.16)};">${stepsGlyph()}</div>
+        <div><h3>Steps</h3><p>A shared step target — daily, or totaled over a period.</p></div>
+      </button>
+      <button class="category-option" onclick="pickChallengeCategory('custom')">
+        <div class="icon" style="background:${withOpacity(CATEGORY_ACCENT_HEX.custom,0.16)};">${checkGlyph()}</div>
+        <div><h3>Custom</h3><p>Anything else — "workout 4x a week," your call.</p></div>
+      </button>
+      <button class="category-option" onclick="pickChallengeCategory('withhold')">
+        <div class="icon" style="background:${withOpacity(CATEGORY_ACCENT_HEX.withhold,0.12)};">${withholdGlyph()}</div>
+        <div><h3>Abstain</h3><p>Whoever stays cleanest wins — one slip costs that day's points.</p></div>
+      </button>
+    </div>
+  `;
+}
+function pickChallengeCategory(cat){
+  challengeDraft = {
+    category: cat, title: '', invites: [],
+    metricKey: cat === 'nutrition' ? 'calories' : cat,
+    targetValue: '', unit: cat==='nutrition' ? NUTRITION_METRIC_UNIT.calories : '',
+    periodLabel: 'week', customDays: 7, stepsMode: 'daily',
+    startDate: todayKey(), endDate: dateKey(addDays(new Date(), 30))
+  };
+  render('challenge-new-form');
+}
+function periodPickerHtml(includeDay){
+  const cd = challengeDraft;
+  return `
+    <div class="field">
+      <label>Period</label>
+      <select onchange="challengeDraft.periodLabel=this.value; render('challenge-new-form');">
+        ${includeDay ? `<option value="day" ${cd.periodLabel==='day'?'selected':''}>Daily</option>` : ''}
+        <option value="week" ${cd.periodLabel==='week'?'selected':''}>Weekly</option>
+        <option value="month" ${cd.periodLabel==='month'?'selected':''}>Monthly</option>
+        <option value="custom" ${cd.periodLabel==='custom'?'selected':''}>Custom stretch</option>
+      </select>
+    </div>
+    ${cd.periodLabel==='custom' ? `
+      <div class="field">
+        <label>Days per period</label>
+        <input type="number" value="${cd.customDays}" oninput="challengeDraft.customDays=this.value" placeholder="e.g. 10">
+      </div>
+    ` : ''}
+  `;
+}
+function viewChallengeForm(){
+  const cd = challengeDraft;
+  const accent = CATEGORY_ACCENT[cd.category] || 'var(--navy)';
+  let fields = '';
+  if(cd.category === 'nutrition'){
+    fields = `
+      <div class="field">
+        <label>Which target?</label>
+        <select onchange="challengeDraft.metricKey=this.value; challengeDraft.unit=NUTRITION_METRIC_UNIT[this.value]; render('challenge-new-form');">
+          ${['calories','protein','fat','carbs','water'].map(k=>`<option value="${k}" ${cd.metricKey===k?'selected':''}>${METRIC_FIXED_LABEL[k]}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field">
+        <label>Daily target (${cd.unit})</label>
+        <input type="number" value="${cd.targetValue}" oninput="challengeDraft.targetValue=this.value" placeholder="e.g. 2000">
+      </div>
+    `;
+  } else if(cd.category === 'steps'){
+    fields = `
+      <div class="field">
+        <label>Step target</label>
+        <input type="number" value="${cd.targetValue}" oninput="challengeDraft.targetValue=this.value" placeholder="e.g. 8000">
+      </div>
+      <div class="field">
+        <label>Counted how?</label>
+        <select onchange="challengeDraft.stepsMode=this.value; render('challenge-new-form');">
+          <option value="daily" ${cd.stepsMode==='daily'?'selected':''}>Every single day</option>
+          <option value="cumulative" ${cd.stepsMode==='cumulative'?'selected':''}>Total over a period</option>
+        </select>
+      </div>
+      ${cd.stepsMode==='cumulative' ? periodPickerHtml(false) : ''}
+    `;
+  } else if(cd.category === 'custom'){
+    fields = `
+      <div class="field">
+        <label>Target count per period</label>
+        <input type="number" value="${cd.targetValue}" oninput="challengeDraft.targetValue=this.value" placeholder="e.g. 4">
+      </div>
+      ${periodPickerHtml(true)}
+    `;
+  } else {
+    fields = `<div class="tip-card" style="align-items:flex-start;"><span class="tip-text">🚫 No numeric target here — a clean day (no slip logged) earns full points, a slipped day earns none.</span></div>`;
+  }
+  return `
+    <div class="wizard-head">
+      <div class="back-btn" onclick="render('challenge-new')">${chevron()}</div>
+      <div>
+        <div class="step-title">Set it up</div>
+        <div class="step-sub">Everyone in this challenge competes on the same target.</div>
+      </div>
+    </div>
+    <div class="field">
+      <label>Challenge name</label>
+      <input type="text" value="${cd.title}" oninput="challengeDraft.title=this.value" placeholder="e.g. October Step Showdown">
+    </div>
+    ${fields}
+    <div class="field">
+      <label>Start date</label>
+      <input type="date" value="${cd.startDate}" oninput="challengeDraft.startDate=this.value">
+    </div>
+    <div class="field">
+      <label>End date</label>
+      <input type="date" value="${cd.endDate}" oninput="challengeDraft.endDate=this.value">
+    </div>
+    ${challengeInvitePanelHtml()}
+    <div class="btn-row">
+      <button class="btn btn-primary btn-block" style="background:${accent};" onclick="saveChallengeAndFinish()">Create challenge 🏆</button>
+    </div>
+  `;
+}
+function challengeInvitePanelHtml(){
+  const invites = challengeDraft.invites || [];
+  return `
+    <div class="field">
+      <label>Invite people (optional — you can invite more later too)</label>
+      <div class="ab-panel" style="border:1.5px solid var(--line); border-radius:12px; padding:14px;">
+        <div class="invite-chip-list">
+          ${invites.map((inv,j)=>`<span class="ab-chip">${inv.firstName}${inv.lastName?' '+inv.lastName:''} <button onclick="removeChallengeInvite(${j})">✕</button></span>`).join('')}
+        </div>
+        <div style="display:flex; gap:8px; margin-bottom:8px;">
+          <input type="text" id="ch-inv-fname" placeholder="First name" style="flex:1; padding:10px 12px; border-radius:8px; border:1.5px solid var(--line); font-size:14px;">
+          <input type="text" id="ch-inv-lname" placeholder="Last name (optional)" style="flex:1; padding:10px 12px; border-radius:8px; border:1.5px solid var(--line); font-size:14px;">
+        </div>
+        <div class="ab-invite-row">
+          <select id="ch-inv-type" onchange="updateChallengeInviteFieldType()">
+            <option value="email">Email</option>
+            <option value="phone">Phone</option>
+          </select>
+          <input type="email" id="ch-inv-value" placeholder="name@email.com">
+          <button class="btn btn-ghost" style="padding:10px 14px; font-size:13px;" onclick="addChallengeInvite()">Invite</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+function updateChallengeInviteFieldType(){
+  const type = document.getElementById('ch-inv-type').value;
+  const meta = abFieldMetaFor(type);
+  const input = document.getElementById('ch-inv-value');
+  input.type = meta.inputType; input.placeholder = meta.placeholder; input.value = '';
+}
+function addChallengeInvite(){
+  const firstName = document.getElementById('ch-inv-fname').value.trim();
+  const lastName = document.getElementById('ch-inv-lname').value.trim();
+  const type = document.getElementById('ch-inv-type').value;
+  const val = document.getElementById('ch-inv-value').value.trim();
+  if(!firstName){ showToast('First name is required'); return; }
+  if(!val) return;
+  challengeDraft.invites = challengeDraft.invites || [];
+  challengeDraft.invites.push({ firstName, lastName, type, value: val });
+  render('challenge-new-form');
+}
+function removeChallengeInvite(j){ challengeDraft.invites.splice(j,1); render('challenge-new-form'); }
+
+async function saveChallengeAndFinish(){
+  const cd = challengeDraft;
+  if(!cd.title || !cd.title.trim()){ showToast('Give your challenge a name'); return; }
+  if(!cd.startDate || !cd.endDate || cd.endDate < cd.startDate){ showToast('Check your start/end dates'); return; }
+  if(cd.category !== 'withhold' && (!cd.targetValue || parseFloat(cd.targetValue) <= 0)){ showToast('Set a target to compete on'); return; }
+
+  const dbMetricType = clientMetricKeyToDb(cd.category === 'nutrition' ? cd.metricKey : cd.category);
+  const periodType = (cd.category === 'nutrition' || cd.category === 'withhold' || (cd.category==='steps' && cd.stepsMode==='daily'))
+    ? 'daily' : clientPeriodToDb(cd.periodLabel || 'day');
+
+  showToast('Creating challenge…');
+  const { data: chRow, error: chErr } = await sbClient.from('challenges').insert({
+    creator_user_id: currentUser.id,
+    title: cd.title.trim(),
+    category: clientCategoryToDb(cd.category),
+    metric_type: dbMetricType,
+    target_value: cd.category === 'withhold' ? null : parseFloat(cd.targetValue),
+    unit: cd.unit || null,
+    period_type: periodType,
+    custom_period_days: (cd.periodLabel === 'custom') ? (parseInt(cd.customDays) || null) : null,
+    steps_mode: cd.category === 'steps' ? (cd.stepsMode || 'daily') : null,
+    start_date: cd.startDate,
+    end_date: cd.endDate
+  }).select().single();
+  if(chErr){ showToast("Couldn't create challenge — " + chErr.message); return; }
+
+  const { error: pErr } = await sbClient.from('challenge_participants').insert({
+    challenge_id: chRow.id, user_id: currentUser.id
+  });
+  if(pErr){ showToast("Couldn't add you as a participant — " + pErr.message); }
+
+  for(const inv of (cd.invites||[])){
+    const { error: iErr } = await sbClient.from('challenge_invites').insert({
+      challenge_id: chRow.id, inviter_user_id: currentUser.id,
+      first_name: inv.firstName, last_name: inv.lastName || '',
+      contact_type: inv.type === 'phone' ? 'phone' : 'email',
+      contact_value: inv.value
+    });
+    if(iErr) showToast("Couldn't invite " + inv.firstName + " — " + iErr.message);
+  }
+
+  await loadChallenges();
+  challengeDraft = null;
+  showToast('Challenge created 🏆');
+  render('challenges');
+}
+
+// ---- detail view: leaderboard + logging + invite-more ----
+let moreInvitesDraft = [];
+function openChallengeDetail(id){ currentChallengeId = id; moreInvitesDraft = []; render('challenge-detail'); }
+function viewChallengeDetail(){
+  const ch = myChallenges.find(c => c.id === currentChallengeId);
+  if(!ch) return `<div class="empty-state" style="text-align:center;"><p>Challenge not found.</p><button class="btn btn-ghost" onclick="render('challenges')">Back to Challenges</button></div>`;
+  const status = challengeStatus(ch);
+  const board = challengeLeaderboard(ch);
+  const isCreator = ch.creatorUserId === currentUser.id;
+  const emoji = { nutrition:'🍽️', steps:'👣', custom:'✅', withhold:'🚫' }[ch.category] || '🏆';
+  const medals = ['🥇','🥈','🥉'];
+  const pendingInvites = ch.invites.filter(i => i.status !== 'accepted');
+
+  return `
+    <div class="wizard-head">
+      <div class="back-btn" onclick="render('challenges')">${chevron()}</div>
+      <div>
+        <div class="step-title">${emoji} ${ch.title}</div>
+        <div class="step-sub">${challengeTargetLabel(ch)}</div>
+      </div>
+    </div>
+    <div class="challenge-meta-row">
+      <span>${status.phase==='upcoming' ? `Starts in <strong>${status.days}d</strong>` : status.phase==='ended' ? '<strong>Ended</strong>' : `<strong>${status.days}d</strong> left`}</span>
+      <span>${ch.startDate} → ${ch.endDate}</span>
+    </div>
+    <div class="points-key">🏆 Points: 10 for hitting it, 7 for 90%+, 3 for 70%+, 0 below${ch.category==='withhold' ? ' — or 10 for a clean day, 0 for a slip.' : '. Scored live as you log.'}</div>
+    ${status.phase !== 'ended' ? challengeLogTodayHtml(ch) : ''}
+    <div class="stat-section-title" style="margin-top:0;">Leaderboard</div>
+    ${board.map((p,i) => `
+      <div class="leaderboard-row ${p.userId===currentUser.id ? 'is-me' : ''}">
+        <div class="leaderboard-rank ${i<3?'medal':''}">${i<3 ? medals[i] : (i+1)}</div>
+        <div class="leaderboard-name">${p.displayName}${p.userId===currentUser.id ? '<span class="you-tag">YOU</span>' : ''}</div>
+        <div>
+          <div class="leaderboard-points">${p.points}</div>
+          <div class="leaderboard-points-label">points</div>
+        </div>
+      </div>
+    `).join('')}
+    ${pendingInvites.length ? `
+      <div class="stat-section-title">Invited, not joined yet</div>
+      ${pendingInvites.map(i => `
+        <div class="ab-person-row">
+          <span>${i.firstName}${i.lastName?' '+i.lastName:''}</span>
+          ${abInviteStatusBadgeHtml(i.status)}
+        </div>
+      `).join('')}
+    ` : ''}
+    ${isCreator ? `
+      <div class="stat-section-title">Invite more people</div>
+      ${moreInvitesPanelHtml()}
+      <button class="btn btn-ghost btn-block" onclick="sendMoreChallengeInvites()">Send invites</button>
+    ` : ''}
+  `;
+}
+function challengeLogTodayHtml(ch){
+  const myLogs = challengeUserLogs(ch, currentUser.id);
+  const today = todayKey();
+  if(ch.category === 'withhold'){
+    const slippedToday = myLogs.some(l => l.date === today && l.slipped);
+    return `
+      <div class="log-today-box">
+        <h4>Today</h4>
+        ${slippedToday
+          ? `<div class="meta">You logged a slip today. That's OK — tomorrow's a clean slate.</div>`
+          : `<div class="meta" style="margin-bottom:10px;">Clean so far today — nothing to log unless you slip.</div>
+             <button class="btn btn-ghost" onclick="logChallengeSlip(${jsAttr(ch.id)})">Log a slip today</button>`
+        }
+      </div>
+    `;
+  }
+  if(ch.category === 'custom'){
+    const doneToday = myLogs.some(l => l.date === today);
+    return `
+      <div class="log-today-box">
+        <h4>Today</h4>
+        ${doneToday ? `<div class="meta">✅ Logged for today.</div>` : `<button class="btn btn-primary btn-block" onclick="logChallengeCheckin(${jsAttr(ch.id)})">Log today's check-in</button>`}
+      </div>
+    `;
+  }
+  const label = ch.category === 'nutrition' ? (METRIC_FIXED_LABEL[ch.metricKey] || 'amount') : 'Steps';
+  const unit = ch.unit || '';
+  const todaySum = myLogs.filter(l=>l.date===today).reduce((s,l)=>s+(parseFloat(l.value)||0),0);
+  return `
+    <div class="log-today-box">
+      <h4>Today${todaySum>0 ? ` — logged ${todaySum}${unit?' '+unit:''} so far` : ''}</h4>
+      <div class="log-today-row">
+        <input type="number" id="challenge-log-input" placeholder="${label}${unit ? ' ('+unit+')' : ''}">
+        <button class="btn btn-primary" onclick="logChallengeAmount(${jsAttr(ch.id)})">Log</button>
+      </div>
+    </div>
+  `;
+}
+async function logChallengeAmount(challengeId){
+  const input = document.getElementById('challenge-log-input');
+  const val = parseFloat(input.value);
+  if(!val || val <= 0){ showToast('Enter an amount first'); return; }
+  const { error } = await sbClient.from('challenge_logs').insert({ challenge_id: challengeId, user_id: currentUser.id, log_date: todayKey(), value: val });
+  if(error){ showToast("Couldn't log that — " + error.message); return; }
+  await loadChallenges();
+  showToast('Logged 🎉');
+  render('challenge-detail');
+}
+async function logChallengeCheckin(challengeId){
+  const { error } = await sbClient.from('challenge_logs').insert({ challenge_id: challengeId, user_id: currentUser.id, log_date: todayKey(), value: 1 });
+  if(error){ showToast("Couldn't log that — " + error.message); return; }
+  await loadChallenges();
+  showToast('Logged 🎉');
+  render('challenge-detail');
+}
+async function logChallengeSlip(challengeId){
+  const { error } = await sbClient.from('challenge_logs').insert({ challenge_id: challengeId, user_id: currentUser.id, log_date: todayKey(), slipped: true });
+  if(error){ showToast("Couldn't log that — " + error.message); return; }
+  await loadChallenges();
+  showToast('Logged — tomorrow is a fresh start');
+  render('challenge-detail');
+}
+function moreInvitesPanelHtml(){
+  return `
+    <div class="ab-panel" style="border:1.5px solid var(--line); border-radius:12px; padding:14px;">
+      <div class="invite-chip-list">
+        ${moreInvitesDraft.map((inv,j)=>`<span class="ab-chip">${inv.firstName}${inv.lastName?' '+inv.lastName:''} <button onclick="removeMoreInvite(${j})">✕</button></span>`).join('')}
+      </div>
+      <div style="display:flex; gap:8px; margin-bottom:8px;">
+        <input type="text" id="more-inv-fname" placeholder="First name" style="flex:1; padding:10px 12px; border-radius:8px; border:1.5px solid var(--line); font-size:14px;">
+        <input type="text" id="more-inv-lname" placeholder="Last name (optional)" style="flex:1; padding:10px 12px; border-radius:8px; border:1.5px solid var(--line); font-size:14px;">
+      </div>
+      <div class="ab-invite-row">
+        <select id="more-inv-type" onchange="updateMoreInviteFieldType()">
+          <option value="email">Email</option>
+          <option value="phone">Phone</option>
+        </select>
+        <input type="email" id="more-inv-value" placeholder="name@email.com">
+        <button class="btn btn-ghost" style="padding:10px 14px; font-size:13px;" onclick="addMoreInvite()">Add</button>
+      </div>
+    </div>
+  `;
+}
+function updateMoreInviteFieldType(){
+  const type = document.getElementById('more-inv-type').value;
+  const meta = abFieldMetaFor(type);
+  const input = document.getElementById('more-inv-value');
+  input.type = meta.inputType; input.placeholder = meta.placeholder; input.value = '';
+}
+function addMoreInvite(){
+  const firstName = document.getElementById('more-inv-fname').value.trim();
+  const lastName = document.getElementById('more-inv-lname').value.trim();
+  const type = document.getElementById('more-inv-type').value;
+  const val = document.getElementById('more-inv-value').value.trim();
+  if(!firstName){ showToast('First name is required'); return; }
+  if(!val) return;
+  moreInvitesDraft.push({ firstName, lastName, type, value: val });
+  render('challenge-detail');
+}
+function removeMoreInvite(j){ moreInvitesDraft.splice(j,1); render('challenge-detail'); }
+async function sendMoreChallengeInvites(){
+  if(moreInvitesDraft.length === 0){ showToast('Add at least one person first'); return; }
+  const ch = myChallenges.find(c => c.id === currentChallengeId);
+  if(!ch) return;
+  for(const inv of moreInvitesDraft){
+    const { error } = await sbClient.from('challenge_invites').insert({
+      challenge_id: ch.id, inviter_user_id: currentUser.id,
+      first_name: inv.firstName, last_name: inv.lastName || '',
+      contact_type: inv.type === 'phone' ? 'phone' : 'email',
+      contact_value: inv.value
+    });
+    if(error) showToast("Couldn't invite " + inv.firstName + " — " + error.message);
+  }
+  moreInvitesDraft = [];
+  await loadChallenges();
+  showToast('Invites sent');
+  render('challenge-detail');
 }
 
 function handleLogout(){
