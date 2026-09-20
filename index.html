@@ -1427,6 +1427,34 @@ async function loadSupportingRelationships(){
   });
 }
 
+// The other side of the same relationship: who I've invited to support MY
+// goals, and their REAL current status. This replaced the Profile page's
+// old "Accountability Buddy" section, which read from a local array that
+// only ever reflected the moment an invite was first created — it never
+// updated when the invite was actually accepted (or declined, or timed
+// out), since that happens in a different person's browser entirely with
+// no way to sync back except by asking the real database, which is what
+// this does instead.
+let myAbInvites = [];
+async function loadMyAbInvites(){
+  if(!currentUser){ myAbInvites = []; return; }
+  const { data, error } = await sbClient
+    .from('ab_invites')
+    .select('id, first_name, last_name, status, sent_at, goal_metrics(metric_type, goals(id, label))')
+    .eq('inviter_user_id', currentUser.id)
+    .order('sent_at', { ascending: false });
+  if(error){ myAbInvites = []; return; }
+  myAbInvites = data
+    .filter(r => r.goal_metrics && r.goal_metrics.goals) // guards against an orphaned invite if its goal was ever deleted
+    .map(r => ({
+      inviteId: r.id,
+      firstName: r.first_name, lastName: r.last_name,
+      status: r.status, sentAt: r.sent_at,
+      goalId: r.goal_metrics.goals.id, goalLabel: r.goal_metrics.goals.label,
+      metricKey: dbMetricKeyToClient(r.goal_metrics.metric_type)
+    }));
+}
+
 function loadNotifications(){
   try{
     const raw = localStorage.getItem('amigoal_notifications_demo');
@@ -1603,6 +1631,7 @@ async function processPendingInvite(){
       return;
     }
     await loadSupportingRelationships();
+    await loadMyAbInvites();
     openModal(`
       <div class="modal-title">You're in! 🎉</div>
       <div class="modal-desc" style="text-align:left; line-height:1.5;">
@@ -1644,6 +1673,7 @@ async function checkAuthAndProceed(){
     currentUser = data.session.user;
     await loadGoalsFromSupabase();
     await loadSupportingRelationships();
+    await loadMyAbInvites();
     proceedAfterAuth();
   } else {
     showAuthScreen('login');
@@ -1720,6 +1750,7 @@ async function submitSignUp(){
     hideAuthScreen();
     await loadGoalsFromSupabase();
     await loadSupportingRelationships();
+    await loadMyAbInvites();
     proceedAfterAuth();
   } else {
     // signUp() itself decided to withhold a session and would normally ask
@@ -1737,6 +1768,7 @@ async function submitSignUp(){
       hideAuthScreen();
       await loadGoalsFromSupabase();
       await loadSupportingRelationships();
+      await loadMyAbInvites();
       proceedAfterAuth();
     } else {
       // Genuinely could not get a session — now it's a real dead end worth
@@ -1760,6 +1792,7 @@ async function submitLogIn(){
   hideAuthScreen();
   await loadGoalsFromSupabase();
   await loadSupportingRelationships();
+  await loadMyAbInvites();
   proceedAfterAuth();
 }
 
@@ -4306,19 +4339,12 @@ function resetMetricValue(goalId, key){
 }
 
 function profileAbSectionHtml(){
-  const goalsWithAbs = goals.map(g => {
-    const seen = new Set();
-    const people = [];
-    g.metrics.forEach(m => {
-      (m.abs||[]).forEach(ab => {
-        const key = ab.type + '|' + ab.value;
-        if(seen.has(key)) return;
-        seen.add(key);
-        people.push(ab);
-      });
-    });
-    return { goal: g, people };
-  }).filter(x => x.people.length > 0);
+  const byGoal = {};
+  myAbInvites.forEach(inv => {
+    if(!byGoal[inv.goalId]) byGoal[inv.goalId] = { goalId: inv.goalId, goalLabel: inv.goalLabel, people: [] };
+    byGoal[inv.goalId].people.push(inv);
+  });
+  const goalsWithAbs = Object.values(byGoal);
 
   return `
     <div class="profile-section">
@@ -4330,14 +4356,14 @@ function profileAbSectionHtml(){
         ${goalsWithAbs.map(x => `
           <div class="ab-goal-block">
             <div class="ab-goal-title" style="display:flex; align-items:center; justify-content:space-between;">
-              <span>${x.goal.title}</span>
-              <button class="btn-text" style="font-size:12px;" onclick="editGoal('${x.goal.id}')">Manage</button>
+              <span>${x.goalLabel}</span>
+              <button class="btn-text" style="font-size:12px;" onclick="editGoal('${x.goalId}')">Manage</button>
             </div>
-            ${x.people.some(p => p.status==='accepted') ? abCheckinStatusHtml(x.goal) : ''}
+            ${x.people.some(p => p.status==='accepted') ? abCheckinStatusHtml(goals.find(g => g.id === x.goalId) || {}) : ''}
             ${x.people.map(p => `
               <div class="ab-person-row">
-                <span>${p.firstName || p.value}${p.lastName ? ' ' + p.lastName : ''}</span>
-                <span class="status-badge ${p.status==='accepted' ? 'status-accepted' : ''}" style="${p.status==='accepted' ? '' : 'background:#F1EFE0; color:#8A7A2E;'}">${p.status==='accepted' ? 'Accepted' : 'Pending'}</span>
+                <span>${p.firstName}${p.lastName ? ' ' + p.lastName : ''}</span>
+                ${abInviteStatusBadgeHtml(p.status)}
               </div>
             `).join('')}
           </div>
@@ -4345,6 +4371,19 @@ function profileAbSectionHtml(){
       `}
     </div>
   `;
+}
+// Maps the real ab_invites.status enum to a display badge — this is what
+// actually reflects whether someone accepted, is still pending, or said no,
+// instead of the old version which could only ever show "Pending."
+function abInviteStatusBadgeHtml(status){
+  const map = {
+    accepted: { label: 'Accepted', style: '' },
+    pending:  { label: 'Pending',  style: 'background:#F1EFE0; color:#8A7A2E;' },
+    declined: { label: 'Declined', style: 'background:#FBE9E7; color:#A23B2E;' },
+    revoked:  { label: 'Revoked',  style: 'background:#F1EFE0; color:#8A7A2E;' }
+  };
+  const s = map[status] || map.pending;
+  return `<span class="status-badge ${status==='accepted' ? 'status-accepted' : ''}" style="${s.style}">${s.label}</span>`;
 }
 // Simulated preview only — no backend scheduler exists in this browser-only
 // prototype to actually run a 60-day timer. Derives a deterministic cycle
