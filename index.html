@@ -723,28 +723,6 @@
   .day-nav-arrow:not(:disabled):hover{ background: #EEF3E4; }
   .day-nav-label{ font-weight: 700; font-size: 15px; color: var(--navy); }
 
-  .food-entry-row{
-    padding: 10px 0;
-    border-top: 1px solid var(--line);
-  }
-  .food-entry-row:first-of-type{ border-top: none; }
-  .food-entry-name{
-    font-size: 13.5px;
-    font-weight: 600;
-    color: var(--ink);
-    margin-bottom: 5px;
-  }
-  .food-entry-macros{
-    display:flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    font-size: 12px;
-    color: var(--muted);
-  }
-  .food-entry-macros b{ color: var(--navy); font-weight: 700; }
-  .food-entry-macros .icon-btn{ padding: 2px; font-size: 11px; }
-  .food-source-tag{ color: var(--muted); font-style: italic; margin-left: auto; }
-
   .withhold-streak-display{
     text-align:center;
     padding: 18px 10px 22px;
@@ -833,7 +811,7 @@
     font-size: 14px;
   }
 
-  .manual-entry-grid{ display:flex; gap:8px; margin-top:10px; }
+  .manual-entry-grid{ display:grid; grid-template-columns: repeat(2, 1fr); gap:8px; margin-top:10px; }
   .manual-entry-grid .me-field{ flex:1; }
   .manual-entry-grid label{ font-size: 11px; color: var(--muted); font-weight:700; display:block; margin-bottom:4px; }
   .manual-entry-grid input{
@@ -844,25 +822,20 @@
     font-size: 14px;
     text-align:center;
   }
-  .calorie-preview{
-    text-align:center;
-    font-size: 12.5px;
-    color: var(--muted);
-    margin-top: 10px;
-  }
-  .calorie-preview strong{ color: var(--navy); }
-
-  .food-history-results{ margin-top: 8px; }
-  .food-history-item{
-    display:flex;
-    justify-content: space-between;
-    align-items:center;
-    padding: 9px 4px;
+  .manual-entry-total{
+    margin-top: 14px;
+    padding-top: 12px;
     border-top: 1px solid var(--line);
-    font-size: 13px;
   }
-  .food-history-item:first-child{ border-top:none; }
-  .food-history-item .macro{ color: var(--muted); font-size: 11.5px; }
+  .manual-entry-total-label{
+    font-size: 12px; font-weight:700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .3px; margin-bottom: 8px;
+  }
+  .manual-entry-total-grid{
+    display:flex; flex-wrap:wrap; gap: 10px 16px;
+    font-size: 13.5px; color: var(--ink);
+  }
+  .manual-entry-total-grid b{ color: var(--navy); }
 
   .steps-input-row, .custom-log-row{ display:flex; gap:8px; align-items:center; }
   .steps-input-row input{
@@ -1112,36 +1085,6 @@
   }
   .share-sheet-toggle input{ width:16px; height:16px; accent-color:var(--green); }
 
-  /* ---------- Barcode scanner — real camera scanning via ZXing ---------- */
-  .barcode-scanner-overlay{
-    position: fixed; inset: 0;
-    background: rgba(16,25,47,.88);
-    z-index: 270;
-    display:flex; align-items:center; justify-content:center;
-    padding: 20px;
-  }
-  .barcode-scanner-card{
-    width:100%; max-width:360px;
-    background: var(--navy-deep);
-    border-radius: 18px;
-    padding: 16px;
-    text-align:center;
-  }
-  #barcode-video{
-    width:100%; border-radius: 12px; background:#000; display:block;
-    aspect-ratio: 4/3; object-fit: cover;
-  }
-  .barcode-aim-box{
-    position:absolute; left:11%; right:11%; top:33%; bottom:33%;
-    border: 2px solid var(--green-light);
-    border-radius: 8px;
-    box-shadow: 0 0 0 999px rgba(0,0,0,.35);
-    pointer-events:none;
-  }
-  .barcode-scanner-hint{
-    color: #fff; font-size: 13px; margin-top: 12px; opacity:.85;
-  }
-
   /* ---------- Guided first-goal walkthrough — a pulsing glow applied directly
      to the real control being explained, so it reads as "click here" rather
      than just a nearby text bubble. ---------- */
@@ -1223,7 +1166,6 @@
 </head>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://fastly.jsdelivr.net/npm/barcode-detector@3/dist/iife/polyfill.min.js"></script>
 <body>
 
 <div class="shell">
@@ -1271,19 +1213,6 @@
 <div class="share-sheet-overlay" id="share-sheet-overlay" style="display:none;" onclick="if(event.target===this) closeShareSheet()">
   <div class="share-sheet-card" id="share-sheet-card"></div>
 </div>
-
-<div class="barcode-scanner-overlay" id="barcode-scanner-overlay" style="display:none;">
-  <div class="barcode-scanner-card">
-    <div style="position:relative;">
-      <video id="barcode-video" autoplay playsinline muted></video>
-      <div class="barcode-aim-box"></div>
-    </div>
-    <div class="barcode-scanner-hint">Line up the barcode, then tap Capture</div>
-    <button class="btn btn-primary btn-block" style="margin-top:12px;" onclick="captureBarcodePhoto()">📸 Capture</button>
-    <button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="closeBarcodeScanner()">Cancel</button>
-  </div>
-</div>
-<input type="file" id="barcode-file-input" accept="image/*" style="display:none;" onchange="handleBarcodeFileChosen(event)">
 
 <div class="toast" id="toast"></div>
 
@@ -2246,21 +2175,6 @@ function withOpacity(hex, alpha){
   const h = hex.replace('#','');
   const r = parseInt(h.substring(0,2),16), g = parseInt(h.substring(2,4),16), b = parseInt(h.substring(4,6),16);
   return `rgba(${r},${g},${b},${alpha})`;
-}
-const FOOD_EMOJI_MAP = [
-  [['chicken','turkey'], '🍗'], [['beef','steak','burger'], '🍔'], [['fish','salmon','tuna'], '🐟'],
-  [['egg'], '🥚'], [['salad','lettuce','greens'], '🥗'], [['rice'], '🍚'], [['pasta','spaghetti','noodle'], '🍝'],
-  [['pizza'], '🍕'], [['bread','toast','sandwich'], '🥪'], [['apple'], '🍎'], [['banana'], '🍌'],
-  [['coffee'], '☕'], [['milk','yogurt','cheese'], '🧀'], [['nuts','almond','peanut'], '🥜'],
-  [['protein shake','shake','smoothie'], '🥤'], [['oat','cereal'], '🥣'], [['avocado'], '🥑'],
-  [['potato','fries'], '🍟'], [['soup'], '🍲'], [['taco','burrito'], '🌮'], [['cookie','cake','dessert','sweet'], '🍪']
-];
-function foodEmoji(name){
-  const n = (name||'').toLowerCase();
-  for(const [keywords, emoji] of FOOD_EMOJI_MAP){
-    if(keywords.some(k => n.includes(k))) return emoji;
-  }
-  return '🍽';
 }
 
 // ---------------------------------------------------------------------
@@ -3889,7 +3803,6 @@ function nutritionLogCardHtml(g){
   const water = waterTotalOnDate(g, d);
   const waterMetric = g.metrics.find(m => m.key === 'water');
   const macroMetrics = g.metrics.filter(m => m.enabled && m.key !== 'water');
-  const entriesToday = (g.foodLog||[]).filter(e => e.date === d);
   const isToday = d === todayKey();
 
   return `
@@ -3901,113 +3814,31 @@ function nutritionLogCardHtml(g){
       ${waterMetric && waterMetric.enabled ? miniMetricRowHtml('Water', water, waterMetric.value, waterMetric.unit, 'water', nutritionMetricStreak(g, waterMetric)) : ''}
 
       <div class="log-tool">
-        <div class="log-tool-head"><span class="name">🍽 Logged ${isToday ? 'today' : 'this day'}</span></div>
-        ${entriesToday.length === 0 ? `<div class="log-tool-desc" style="margin-bottom:0;">🍽 Nothing here yet ${isToday ? '— log your first bite of the day below' : 'for this day'}.</div>` : entriesToday.map(e => foodEntryRowHtml(g.id, e)).join('')}
-      </div>
-
-      <div class="log-tool">
-        <div class="log-tool-head"><span class="name">📷 Barcode Lookup</span><span class="badge" style="background:#EEF3E4; color:var(--green-deep);">FREE</span></div>
-        <div class="log-tool-desc">Type the barcode number, or scan it.</div>
-        <div class="quick-add-row">
-          <button class="quick-add-btn" onclick="openBarcodeScanner('${g.id}')">📷 Scan barcode</button>
-          <button class="quick-add-btn" onclick="pickBarcodePhoto('${g.id}')">🖼 Choose photo</button>
-        </div>
-        <div class="custom-amount-row">
-          <input type="text" inputmode="numeric" id="barcode-input-${g.id}" placeholder="e.g. 012345678901">
-          <button class="btn btn-primary" style="padding:9px 18px; font-size:13px;" onclick="lookupBarcode('${g.id}')">Look up</button>
-        </div>
-        <div id="barcode-result-${g.id}"></div>
-      </div>
-
-      <div class="log-tool locked" onclick="lockedToolToast()">
-        <div class="log-tool-head"><span class="name">📷 AI Photo Analysis</span><span class="badge">🔒 AI</span></div>
-        <div class="log-tool-desc">Photo your meal — AI estimates the macros. Needs a secure backend connection, coming in a later build.</div>
-      </div>
-
-      <div class="log-tool locked" onclick="lockedToolToast()">
-        <div class="log-tool-head"><span class="name">💬 Describe your meal</span><span class="badge">🔒 AI</span></div>
-        <div class="log-tool-desc">Tell it what you ate in plain English. Same backend dependency as above.</div>
-      </div>
-
-      ${g.foodLog.length ? `
-        <div class="log-tool">
-          <div class="log-tool-head"><span class="name">🕓 My Food History</span></div>
-          <div class="log-tool-desc">Everything you've logged before — manual, barcode, or otherwise.</div>
-          <input type="text" placeholder="Search your past foods..." oninput="renderFoodHistoryResults('${g.id}', this.value)" style="width:100%; padding:10px 12px; border-radius:8px; border:1.5px solid var(--line); font-size:14px;">
-          <div class="food-history-results" id="food-history-${g.id}"></div>
-        </div>
-      ` : ''}
-
-      ${waterMetric && waterMetric.enabled ? `
-        <div class="log-tool">
-          <div class="log-tool-head"><span class="name">💧 Log Water</span></div>
-          <div class="log-tool-desc">Track your water intake.</div>
-          <div class="quick-add-row">
-            ${[8,12,16,20,32].map(oz => `<button class="quick-add-btn" onclick="logWater('${g.id}', ${oz})">${oz} oz</button>`).join('')}
-          </div>
-          <div class="custom-amount-row">
-            <input type="number" min="1" id="water-custom-${g.id}" placeholder="Custom amount (oz)">
-            <button class="btn btn-primary" style="padding:9px 18px; font-size:13px;" onclick="logWaterCustom('${g.id}')">Add</button>
-          </div>
-        </div>
-      ` : ''}
-
-      <div class="log-tool">
         <div class="log-tool-head"><span class="name">✏️ Manual Entry</span></div>
-        <div class="log-tool-desc">Type it in yourself. Calories are calculated for you.</div>
-        <input type="text" id="me-name-${g.id}" placeholder="Food name (e.g. Chicken breast)" style="width:100%; padding:10px 12px; border-radius:8px; border:1.5px solid var(--line); font-size:14px;">
+        <div class="log-tool-desc">Enter what you had, tap Add — the boxes clear so you can log the next thing.</div>
         <div class="manual-entry-grid">
-          <div class="me-field"><label>PROTEIN (g)</label><input type="number" min="0" id="me-protein-${g.id}" value="0" oninput="updateCaloriePreview('${g.id}')"></div>
-          <div class="me-field"><label>FAT (g)</label><input type="number" min="0" id="me-fat-${g.id}" value="0" oninput="updateCaloriePreview('${g.id}')"></div>
-          <div class="me-field"><label>CARBS (g)</label><input type="number" min="0" id="me-carbs-${g.id}" value="0" oninput="updateCaloriePreview('${g.id}')"></div>
+          <div class="me-field"><label>CALORIES</label><input type="number" min="0" id="me-calories-${g.id}" value="0"></div>
+          <div class="me-field"><label>PROTEIN (g)</label><input type="number" min="0" id="me-protein-${g.id}" value="0"></div>
+          <div class="me-field"><label>FAT (g)</label><input type="number" min="0" id="me-fat-${g.id}" value="0"></div>
+          <div class="me-field"><label>CARBS (g)</label><input type="number" min="0" id="me-carbs-${g.id}" value="0"></div>
+          <div class="me-field"><label>WATER (oz)</label><input type="number" min="0" id="me-water-${g.id}" value="0"></div>
         </div>
-        <div class="calorie-preview" id="me-cal-${g.id}">≈ <strong>0</strong> calories</div>
         <div class="btn-row" style="margin-top:12px;">
           <button class="btn btn-primary btn-block" onclick="addManualEntry('${g.id}')">Add to log</button>
         </div>
+        <div class="manual-entry-total">
+          <div class="manual-entry-total-label">${isToday ? "Today's" : dayLabel(d) + "'s"} total</div>
+          <div class="manual-entry-total-grid">
+            <span>🔥 <b>${totals.calories||0}</b> cal</span>
+            <span>🥩 <b>${totals.protein||0}g</b></span>
+            <span>🥑 <b>${totals.fat||0}g</b></span>
+            <span>🌾 <b>${totals.carbs||0}g</b></span>
+            <span>💧 <b>${water||0}oz</b></span>
+          </div>
+        </div>
       </div>
     </div>
   `;
-}
-function foodEntryRowHtml(goalId, e){
-  const sourceTag = { manual:'✏️ Manual', barcode:'📷 Barcode', ai_photo:'🤖 AI', ai_describe:'🤖 AI' }[e.source] || '✏️ Manual';
-  return `
-    <div class="food-entry-row">
-      <div class="food-entry-name">${foodEmoji(e.name)} ${e.name} <button class="icon-btn" onclick="deleteFoodEntry('${goalId}','${e.id}')" aria-label="Delete">✕</button></div>
-      <div class="food-entry-macros">
-        <span style="color:${metricStyle('calories').color};">🔥 <b>${e.calories}</b><button class="icon-btn" onclick="editFoodEntryField('${goalId}','${e.id}','calories')">✎</button></span>
-        <span style="color:${metricStyle('protein').color};">🥩 <b>${e.protein}g</b><button class="icon-btn" onclick="editFoodEntryField('${goalId}','${e.id}','protein')">✎</button></span>
-        <span style="color:${metricStyle('fat').color};">🥑 <b>${e.fat}g</b><button class="icon-btn" onclick="editFoodEntryField('${goalId}','${e.id}','fat')">✎</button></span>
-        <span style="color:${metricStyle('carbs').color};">🌾 <b>${e.carbs}g</b><button class="icon-btn" onclick="editFoodEntryField('${goalId}','${e.id}','carbs')">✎</button></span>
-        <span class="food-source-tag">${sourceTag}</span>
-      </div>
-    </div>
-  `;
-}
-function editFoodEntryField(goalId, entryId, field){
-  const g = goals.find(x => x.id === goalId);
-  const e = g.foodLog.find(x => x.id === entryId);
-  const labels = { calories:'Calories', protein:'Protein (g)', fat:'Fat (g)', carbs:'Carbs (g)' };
-  const dbColumn = { calories:'calories', protein:'protein_g', fat:'fat_g', carbs:'carbs_g' }[field];
-  promptModal(labels[field], {
-    type: 'number', value: e[field],
-    onConfirm: async (v) => {
-      if(isNaN(parseFloat(v))) return;
-      const newVal = Math.round(parseFloat(v)*10)/10;
-      const { error } = await sbClient.from('food_log_entries').update({ [dbColumn]: newVal }).eq('id', entryId);
-      if(error){ showToast("Couldn't save — " + error.message); return; }
-      e[field] = newVal;
-      render('log');
-    }
-  });
-}
-async function deleteFoodEntry(goalId, entryId){
-  const g = goals.find(x => x.id === goalId);
-  const { error } = await sbClient.from('food_log_entries').delete().eq('id', entryId);
-  if(error){ showToast("Couldn't delete — " + error.message); return; }
-  g.foodLog = g.foodLog.filter(x => x.id !== entryId);
-  showToast('Removed');
-  render('log');
 }
 function miniMetricRowHtml(label, value, target, unit, key, streak){
   target = parseFloat(target)||0;
@@ -4025,280 +3856,55 @@ function miniMetricRowHtml(label, value, target, unit, key, streak){
     </div>
   `;
 }
-function lockedToolToast(){
-  showToast('Not connected yet — this needs a secure backend AI call');
-}
-// ---------------------------------------------------------------------
-// BARCODE SCANNING — real camera + photo-file scanning via the
-// barcode-detector polyfill (ZXing-C++ compiled to WebAssembly). Was a
-// stub ("needs the native app") back when this only ran inside Claude's
-// sandbox, which blocks camera access entirely; now that it's a normal
-// HTTPS site, real getUserMedia camera access works like any other website.
-//
-// Went through two prior JS-only libraries before this one:
-//   1. html5-qrcode kept internal canvas state inside a persistent
-//      container div between calls — every attempt after the first was
-//      reusing a container still cluttered with the last scan's leftovers,
-//      which is why only the first scan ever worked, even after adding
-//      the library's own documented clear() cleanup step.
-//   2. @zxing/library (the pure-JS port) fixed that specific bug, but got
-//      loaded from a CDN path that silently didn't define its global at
-//      all, so nothing ran, ever.
-// This library implements the browser's own standard BarcodeDetector API
-// (detect() takes a canvas/image, returns results — no persistent
-// container, nothing shared between calls to ever corrupt) using the
-// actual C++ reference decoder compiled to WebAssembly rather than a pure-
-// JS port, which is both more accurate and works on Safari/iOS, where the
-// real native BarcodeDetector still isn't supported as of this build.
-//
-// Manual Capture button (not continuous auto-scan) so there's always a
-// clear, visible action rather than silently retrying every frame forever.
-// ---------------------------------------------------------------------
-const BARCODE_FORMATS = ['upc_a', 'upc_e', 'ean_13', 'ean_8'];
-let barcodeStream = null;
-let barcodeScanGoalId = null;
-
-function openBarcodeScanner(goalId){
-  barcodeScanGoalId = goalId;
-  document.getElementById('barcode-scanner-overlay').style.display = 'flex';
-  navigator.mediaDevices.getUserMedia({
-    video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
-  })
-    .then(stream => {
-      barcodeStream = stream;
-      document.getElementById('barcode-video').srcObject = stream;
-    })
-    .catch(() => {
-      closeBarcodeScanner();
-      showToast("Couldn't access the camera — check camera permissions, or type the barcode manually");
-    });
-}
-function closeBarcodeScanner(){
-  document.getElementById('barcode-scanner-overlay').style.display = 'none';
-  if(barcodeStream){
-    // Always release the camera stream — leaving it running in the
-    // background after the overlay closes would be a real privacy/battery
-    // problem, not just a cosmetic one.
-    barcodeStream.getTracks().forEach(t => t.stop());
-    barcodeStream = null;
-  }
-}
-// Decoding the ENTIRE captured frame (background included) fails far more
-// often than it should — the barcode only occupies a small fraction of a
-// full-width photo taken at normal arm's-length distance. So this crops to
-// the aim-box region first (matching what's outlined on screen), giving
-// the decoder a much larger, more detailed view of just the barcode — and
-// only falls back to the full uncropped frame if that tighter crop comes
-// up empty, in case the barcode wasn't perfectly centered.
-function captureBarcodePhoto(){
-  const video = document.getElementById('barcode-video');
-  if(!video.videoWidth){ showToast('Camera still loading — give it a second and try again'); return; }
-  const goalId = barcodeScanGoalId;
-
-  const fullCanvas = document.createElement('canvas');
-  fullCanvas.width = video.videoWidth;
-  fullCanvas.height = video.videoHeight;
-  fullCanvas.getContext('2d').drawImage(video, 0, 0);
-
-  const cropW = video.videoWidth * 0.78;
-  const cropH = video.videoHeight * 0.34;
-  const cropX = (video.videoWidth - cropW) / 2;
-  const cropY = (video.videoHeight - cropH) / 2;
-  const cropCanvas = document.createElement('canvas');
-  cropCanvas.width = cropW;
-  cropCanvas.height = cropH;
-  cropCanvas.getContext('2d').drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-
-  closeBarcodeScanner();
-
-  decodeCanvasForBarcode(cropCanvas, goalId, false, () => {
-    decodeCanvasForBarcode(fullCanvas, goalId, true, null);
-  });
-}
-// "Choose photo" — picks or takes a single photo via the device's native
-// picker (not our own live preview) and decodes any barcode found in it.
-// Useful when the live camera struggles with glare or a curved surface.
-function pickBarcodePhoto(goalId){
-  barcodeScanGoalId = goalId;
-  document.getElementById('barcode-file-input').click();
-}
-function handleBarcodeFileChosen(event){
-  const file = event.target.files[0];
-  event.target.value = ''; // allow choosing the same file again later
-  if(!file || !barcodeScanGoalId) return;
-  const goalId = barcodeScanGoalId;
-  const img = new Image();
-  img.onload = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    canvas.getContext('2d').drawImage(img, 0, 0);
-    URL.revokeObjectURL(img.src);
-    decodeCanvasForBarcode(canvas, goalId, false, null);
-  };
-  img.onerror = () => showToast("Couldn't open that photo — try a different one, or type the barcode manually");
-  img.src = URL.createObjectURL(file);
-}
-// Shared by every path above. A fresh BarcodeDetector instance per call,
-// decoding directly from an in-memory canvas — no DOM container to
-// manage, nothing persists between calls, so there's no shared state one
-// scan could leave behind to break the next one.
-// `quiet` skips the "Reading barcode…" toast (used for the silent full-
-// frame fallback attempt, so it doesn't flash a second redundant toast).
-// `onFail` lets a caller chain a fallback attempt instead of showing the
-// final error immediately.
-function decodeCanvasForBarcode(canvas, goalId, quiet, onFail){
-  if(typeof BarcodeDetector === 'undefined'){
-    showToast("Barcode scanner failed to load — check your connection and reopen the app, or type the barcode manually");
-    return;
-  }
-  if(!quiet) showToast('Reading barcode…');
-  const detector = new BarcodeDetector({ formats: BARCODE_FORMATS });
-  detector.detect(canvas)
-    .then((results) => {
-      if(!results || !results.length) throw new Error('no barcode found');
-      const input = document.getElementById('barcode-input-'+goalId);
-      if(input) input.value = results[0].rawValue;
-      lookupBarcode(goalId);
-    })
-    .catch(() => {
-      if(onFail) onFail();
-      else showToast("Couldn't find a barcode in that photo — try holding it steadier/closer/more in focus, or type it manually");
-    });
-}
-function calcCaloriesFromMacros(p, f, c){ return Math.round((p*4) + (f*9) + (c*4)); }
-function updateCaloriePreview(goalId){
-  const p = parseFloat(document.getElementById('me-protein-'+goalId).value)||0;
-  const f = parseFloat(document.getElementById('me-fat-'+goalId).value)||0;
-  const c = parseFloat(document.getElementById('me-carbs-'+goalId).value)||0;
-  const cal = calcCaloriesFromMacros(p,f,c);
-  document.getElementById('me-cal-'+goalId).innerHTML = `≈ <strong>${cal}</strong> calories`;
-}
+// Manual Entry is a pure totals tool now — no food name, no per-item list.
+// Each tap of "Add to log" independently writes whatever of the 5 fields
+// is non-zero (calories/protein/fat/carbs go to food_log_entries as one
+// nameless entry; water goes to goal_metric_logs against the water metric,
+// same table water logging always used), then clears all 5 boxes so the
+// next thing can be typed in immediately. The running total shown below
+// the button is just today's real totals — the same numbers already
+// powering the progress rows above, not a separately tracked figure.
 async function addManualEntry(goalId){
   const g = goals.find(x => x.id === goalId);
-  const name = document.getElementById('me-name-'+goalId).value.trim() || 'Logged food';
+  const calories = parseFloat(document.getElementById('me-calories-'+goalId).value)||0;
   const protein = parseFloat(document.getElementById('me-protein-'+goalId).value)||0;
   const fat = parseFloat(document.getElementById('me-fat-'+goalId).value)||0;
   const carbs = parseFloat(document.getElementById('me-carbs-'+goalId).value)||0;
-  const calories = calcCaloriesFromMacros(protein, fat, carbs);
-  if(protein===0 && fat===0 && carbs===0){ showToast('Add at least one macro before logging'); return; }
-  const { data, error } = await sbClient.from('food_log_entries').insert({
-    goal_id: goalId, log_date: currentLogDate, name, calories, protein_g: protein, fat_g: fat, carbs_g: carbs, source: 'manual'
-  }).select().single();
-  if(error){ showToast("Couldn't log that — " + error.message); return; }
-  g.foodLog.push({ id: data.id, date: data.log_date, name: data.name, protein: data.protein_g, fat: data.fat_g, carbs: data.carbs_g, calories: data.calories, source: data.source, loggedAt: new Date(data.logged_at).getTime() });
-  checkNutritionCelebrations(g);
-  showToast(`Logged ${name}`);
-  render('log');
-}
-function renderFoodHistoryResults(goalId, query){
-  const g = goals.find(x => x.id === goalId);
-  const box = document.getElementById('food-history-'+goalId);
-  query = query.trim().toLowerCase();
-  if(!query){ box.innerHTML = ''; return; }
-  const seen = new Set();
-  const matches = g.foodLog.filter(e => {
-    const nameLower = e.name.toLowerCase();
-    if(!nameLower.includes(query)) return false;
-    if(seen.has(nameLower)) return false;
-    seen.add(nameLower);
-    return true;
-  }).slice(-8).reverse();
-  if(!matches.length){ box.innerHTML = `<div class="food-history-item">No matches</div>`; return; }
-  box.innerHTML = matches.map(e => `
-    <div class="food-history-item">
-      <span>${foodEmoji(e.name)} ${e.name}<br><span class="macro">${e.calories} cal · P${e.protein} F${e.fat} C${e.carbs}</span></span>
-      <button class="btn btn-ghost" style="padding:7px 12px; font-size:12px;" onclick="reAddFood('${goalId}','${e.id}')">Add</button>
-    </div>
-  `).join('');
-}
-async function reAddFood(goalId, entryId){
-  const g = goals.find(x => x.id === goalId);
-  const src = g.foodLog.find(e => e.id === entryId);
-  if(!src) return;
-  const { data, error } = await sbClient.from('food_log_entries').insert({
-    goal_id: goalId, log_date: currentLogDate, name: src.name, calories: src.calories,
-    protein_g: src.protein, fat_g: src.fat, carbs_g: src.carbs, source: src.source || 'manual'
-  }).select().single();
-  if(error){ showToast("Couldn't log that — " + error.message); return; }
-  g.foodLog.push({ id: data.id, date: data.log_date, name: data.name, protein: data.protein_g, fat: data.fat_g, carbs: data.carbs_g, calories: data.calories, source: data.source, loggedAt: new Date(data.logged_at).getTime() });
-  checkNutritionCelebrations(g);
-  showToast(`Logged ${src.name}`);
-  render('log');
-}
-async function logWater(goalId, oz){
-  const g = goals.find(x => x.id === goalId);
-  const waterMetric = g.metrics.find(m => m.key === 'water');
-  if(!waterMetric){ showToast('Water tracking is off for this goal'); return; }
-  const { data, error } = await sbClient.from('goal_metric_logs').insert({
-    goal_metric_id: waterMetric.id, log_date: currentLogDate, value: oz
-  }).select().single();
-  if(error){ showToast("Couldn't log water — " + error.message); return; }
-  g.waterLog.push({ id: data.id, date: data.log_date, amount: data.value, loggedAt: new Date(data.logged_at).getTime() });
-  checkNutritionCelebrations(g);
-  showToast(`+${oz} oz water`);
-  render('log');
-}
-function logWaterCustom(goalId){
-  const input = document.getElementById('water-custom-'+goalId);
-  const oz = parseFloat(input.value);
-  if(!oz || oz <= 0){ showToast('Enter an amount first'); return; }
-  logWater(goalId, oz);
-}
+  const water = parseFloat(document.getElementById('me-water-'+goalId).value)||0;
 
-// Barcode lookup — tries Open Food Facts (free, no key required) directly.
-// NOTE: published Claude artifact pages block outbound fetches to arbitrary
-// domains as a security measure, so this call is expected to fail here and
-// falls back to an honest message. Once wrapped in Capacitor as a real app
-// (or once this goes through your own backend), this same code will work.
-function lookupBarcode(goalId){
-  const input = document.getElementById('barcode-input-'+goalId);
-  const code = input.value.trim();
-  const resultBox = document.getElementById('barcode-result-'+goalId);
-  if(!code){ showToast('Enter a barcode number first'); return; }
-  resultBox.innerHTML = `<div class="log-tool-desc" style="margin-top:10px;">Looking up ${code}…</div>`;
-  fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json`)
-    .then(r => r.json())
-    .then(data => {
-      if(!data.product){ resultBox.innerHTML = `<div class="log-tool-desc" style="margin-top:10px;">No product found for that barcode.</div>`; return; }
-      const p = data.product;
-      const n = p.nutriments || {};
-      const found = {
-        name: p.product_name || 'Unknown product',
-        calories: Math.round(n['energy-kcal_100g'] || 0),
-        protein: Math.round(n.proteins_100g || 0),
-        fat: Math.round(n.fat_100g || 0),
-        carbs: Math.round(n.carbohydrates_100g || 0)
-      };
-      pendingBarcodeResults[goalId] = found;
-      resultBox.innerHTML = barcodeResultHtml(goalId, found);
-    })
-    .catch(() => {
-      resultBox.innerHTML = `<div class="log-tool-desc" style="margin-top:10px;">Couldn't reach the food database right now — check your connection and try again, or use Manual Entry instead.</div>`;
-    });
-}
-let pendingBarcodeResults = {};
-function barcodeResultHtml(goalId, found){
-  return `
-    <div class="log-tool-desc" style="margin-top:10px; color:var(--ink);">
-      <strong>${foodEmoji(found.name)} ${found.name}</strong><br>
-      ${found.calories} cal · P${found.protein} F${found.fat} C${found.carbs} <span style="color:var(--muted);">(per 100g)</span>
-    </div>
-    <button class="btn btn-primary btn-block" style="margin-top:8px;" onclick="addBarcodeResult('${goalId}')">Add to log</button>
-  `;
-}
-async function addBarcodeResult(goalId){
-  const g = goals.find(x => x.id === goalId);
-  const found = pendingBarcodeResults[goalId];
-  if(!found) return;
-  const { data, error } = await sbClient.from('food_log_entries').insert({
-    goal_id: goalId, log_date: currentLogDate, name: found.name, calories: found.calories,
-    protein_g: found.protein, fat_g: found.fat, carbs_g: found.carbs, source: 'barcode'
-  }).select().single();
-  if(error){ showToast("Couldn't log that — " + error.message); return; }
-  g.foodLog.push({ id: data.id, date: data.log_date, name: data.name, protein: data.protein_g, fat: data.fat_g, carbs: data.carbs_g, calories: data.calories, source: data.source, loggedAt: new Date(data.logged_at).getTime() });
+  if(calories===0 && protein===0 && fat===0 && carbs===0 && water===0){
+    showToast('Enter at least one value before logging');
+    return;
+  }
+
+  if(calories>0 || protein>0 || fat>0 || carbs>0){
+    const { data, error } = await sbClient.from('food_log_entries').insert({
+      goal_id: goalId, log_date: currentLogDate, calories, protein_g: protein, fat_g: fat, carbs_g: carbs, source: 'manual'
+    }).select().single();
+    if(error){ showToast("Couldn't log that — " + error.message); return; }
+    g.foodLog.push({ id: data.id, date: data.log_date, name: null, protein: data.protein_g, fat: data.fat_g, carbs: data.carbs_g, calories: data.calories, source: data.source, loggedAt: new Date(data.logged_at).getTime() });
+  }
+
+  if(water>0){
+    const waterMetric = g.metrics.find(m => m.key === 'water');
+    if(!waterMetric){
+      showToast('Logged macros, but water tracking is off for this goal');
+    } else {
+      const { data, error } = await sbClient.from('goal_metric_logs').insert({
+        goal_metric_id: waterMetric.id, log_date: currentLogDate, value: water
+      }).select().single();
+      if(error){ showToast("Couldn't log water — " + error.message); return; }
+      g.waterLog.push({ id: data.id, date: data.log_date, amount: data.value, loggedAt: new Date(data.logged_at).getTime() });
+    }
+  }
+
+  ['calories','protein','fat','carbs','water'].forEach(f => {
+    const el = document.getElementById('me-'+f+'-'+goalId);
+    if(el) el.value = 0;
+  });
+
   checkNutritionCelebrations(g);
-  showToast(`Logged ${found.name}`);
+  showToast('Logged');
   render('log');
 }
 
