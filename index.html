@@ -1569,7 +1569,7 @@ async function loadChallenges(){
   if(!currentUser){ myChallenges = []; return; }
   const { data, error } = await sbClient
     .from('challenges')
-    .select('*, challenge_participants(user_id, joined_at, active, users(display_name)), challenge_logs(user_id, log_date, value, slipped), challenge_invites(id, first_name, last_name, status, contact_type)')
+    .select('*, challenge_items(*), challenge_participants(user_id, joined_at, active, users(display_name)), challenge_logs(user_id, challenge_item_id, log_date, value, slipped), challenge_invites(id, first_name, last_name, status, contact_type)')
     .order('created_at', { ascending: false });
   if(error){
     showToast("Couldn't load challenges — " + error.message);
@@ -1582,23 +1582,27 @@ function dbChallengeToClient(row){
   const participants = (row.challenge_participants || [])
     .filter(p => p.active)
     .map(p => ({ userId: p.user_id, displayName: (toOne(p.users) || {}).display_name || 'Someone', joinedAt: p.joined_at }));
-  const logs = (row.challenge_logs || []).map(l => ({ userId: l.user_id, date: l.log_date, value: l.value, slipped: l.slipped }));
+  const items = (row.challenge_items || []).map(it => ({
+    id: it.id,
+    category: dbCategoryToClient(it.category),
+    metricKey: dbMetricKeyToClient(it.metric_type),
+    label: it.label,
+    targetValue: it.target_value,
+    unit: it.unit,
+    periodLabel: dbPeriodToClient(it.period_type),
+    customDays: it.custom_period_days,
+    stepsMode: it.steps_mode
+  }));
+  const logs = (row.challenge_logs || []).map(l => ({ userId: l.user_id, itemId: l.challenge_item_id, date: l.log_date, value: l.value, slipped: l.slipped }));
   const invites = (row.challenge_invites || []).map(i => ({ id: i.id, firstName: i.first_name, lastName: i.last_name, status: i.status, contactType: i.contact_type }));
   return {
     id: row.id,
     title: row.title,
-    category: dbCategoryToClient(row.category),
-    metricKey: dbMetricKeyToClient(row.metric_type),
-    targetValue: row.target_value,
-    unit: row.unit,
-    periodLabel: dbPeriodToClient(row.period_type),
-    customDays: row.custom_period_days,
-    stepsMode: row.steps_mode,
     startDate: row.start_date,
     endDate: row.end_date,
     creatorUserId: row.creator_user_id,
     createdAt: new Date(row.created_at).getTime(),
-    participants, logs, invites
+    items, participants, logs, invites
   };
 }
 
@@ -2440,8 +2444,7 @@ function render(view, payload){
   else if(view === 'log') app.innerHTML = viewLog();
   else if(view === 'supporting') app.innerHTML = viewSupporting();
   else if(view === 'challenges') app.innerHTML = viewChallenges();
-  else if(view === 'challenge-new') app.innerHTML = viewChallengeCategory();
-  else if(view === 'challenge-new-form') app.innerHTML = viewChallengeForm();
+  else if(view === 'challenge-new') app.innerHTML = viewChallengeNew();
   else if(view === 'challenge-detail') app.innerHTML = viewChallengeDetail();
   renderNav();
   animateCountUps();
@@ -4815,12 +4818,14 @@ function profileWeightHistorySectionHtml(ng){
 }
 
 // =======================================================================
-// CHALLENGES — competitive counterpart to private goals. Everyone in a
-// challenge competes on the SAME target; points are tiered (10 for
-// hitting it, 7 for 90%+, 3 for 70%+, 0 below — or 10/0 for a clean vs.
-// slipped day on an abstain challenge) and scored live, client-side, from
-// real logged data — same philosophy the rest of the app already uses
-// for streaks, not a batch job that finalizes after a period closes.
+// CHALLENGES — competitive counterpart to private goals. A challenge is
+// named once and can combine several ITEMS under one shared roster and
+// leaderboard (nutrition + steps + custom + abstain, any mix) — same
+// relationship shape as goals -> goal_metrics. Each item scores 10/7/3/0
+// on its own (10/0 clean-vs-slip for abstain items); a participant's
+// total is the sum across every item, live-scored client-side from real
+// logged data, same philosophy the rest of the app already uses for
+// streaks rather than a batch job that finalizes after a period closes.
 // =======================================================================
 const NUTRITION_METRIC_UNIT = { calories:'kcal', protein:'g', fat:'g', carbs:'g', water:'fl oz' };
 
@@ -4831,30 +4836,32 @@ function challengeTierPoints(pct){
   if(pct >= 0.7) return 3;
   return 0;
 }
-function challengeUserLogs(ch, userId){ return ch.logs.filter(l => l.userId === userId); }
-function getChallengePeriodWindow(ch, refDateStr){
-  return getPeriodWindow({ createdAt: parseDateKey(ch.startDate).getTime() }, { periodLabel: ch.periodLabel, customDays: ch.customDays }, refDateStr);
+function challengeItemUserLogs(ch, item, userId){
+  return ch.logs.filter(l => l.userId === userId && l.itemId === item.id);
 }
-function challengeDailyPoints(ch, logs, dateStr){
-  if(ch.category === 'withhold'){
+function getChallengeItemPeriodWindow(ch, item, refDateStr){
+  return getPeriodWindow({ createdAt: parseDateKey(ch.startDate).getTime() }, { periodLabel: item.periodLabel, customDays: item.customDays }, refDateStr);
+}
+function challengeItemDailyPoints(item, logs, dateStr){
+  if(item.category === 'withhold'){
     const slipped = logs.some(l => l.date === dateStr && l.slipped);
     return slipped ? 0 : 10;
   }
   const val = logs.filter(l => l.date === dateStr).reduce((s,l) => s + (parseFloat(l.value)||0), 0);
-  const pct = ch.targetValue > 0 ? val / ch.targetValue : 0;
+  const pct = item.targetValue > 0 ? val / item.targetValue : 0;
   return challengeTierPoints(pct);
 }
-function challengePointsForUser(ch, userId){
-  const logs = challengeUserLogs(ch, userId);
+function challengeItemPointsForUser(ch, item, userId){
+  const logs = challengeItemUserLogs(ch, item, userId);
   const today = todayKey();
   const endKey = ch.endDate < today ? ch.endDate : today;
   if(endKey < ch.startDate) return 0;
-  const isDaily = ch.category === 'withhold' || ch.category === 'nutrition' || (ch.category === 'steps' && ch.stepsMode === 'daily');
+  const isDaily = item.category === 'withhold' || item.category === 'nutrition' || (item.category === 'steps' && item.stepsMode === 'daily');
   if(isDaily){
     let total = 0;
     let cursor = parseDateKey(ch.startDate);
     while(dateKey(cursor) <= endKey){
-      total += challengeDailyPoints(ch, logs, dateKey(cursor));
+      total += challengeItemDailyPoints(item, logs, dateKey(cursor));
       cursor = addDays(cursor, 1);
     }
     return total;
@@ -4864,20 +4871,25 @@ function challengePointsForUser(ch, userId){
   let total = 0;
   let cursor = parseDateKey(ch.startDate);
   for(let i = 0; i < 500; i++){
-    const win = getChallengePeriodWindow(ch, dateKey(cursor));
+    const win = getChallengeItemPeriodWindow(ch, item, dateKey(cursor));
     const cappedEnd = win.end > endKey ? endKey : win.end;
     let achieved;
-    if(ch.category === 'custom'){
+    if(item.category === 'custom'){
       achieved = new Set(logs.filter(l => l.date >= win.start && l.date <= cappedEnd).map(l => l.date)).size;
     } else {
       achieved = logs.filter(l => l.date >= win.start && l.date <= cappedEnd).reduce((s,l) => s + (parseFloat(l.value)||0), 0);
     }
-    const pct = ch.targetValue > 0 ? achieved / ch.targetValue : 0;
+    const pct = item.targetValue > 0 ? achieved / item.targetValue : 0;
     total += challengeTierPoints(pct);
     if(win.end >= endKey) break;
     cursor = addDays(parseDateKey(win.end), 1);
   }
   return total;
+}
+// Combined score across every item in the challenge — sum, not average,
+// so showing up across the whole challenge beats acing just one item.
+function challengePointsForUser(ch, userId){
+  return ch.items.reduce((sum, item) => sum + challengeItemPointsForUser(ch, item, userId), 0);
 }
 function challengeLeaderboard(ch){
   return ch.participants.map(p => Object.assign({}, p, { points: challengePointsForUser(ch, p.userId) }))
@@ -4889,22 +4901,32 @@ function challengeStatus(ch){
   if(today > ch.endDate) return { phase:'ended', days: 0 };
   return { phase:'active', days: Math.round((parseDateKey(ch.endDate)-parseDateKey(today))/86400000) + 1 };
 }
-function challengeTargetLabel(ch){
-  if(ch.category === 'withhold') return 'No slipping — clean days win';
-  if(ch.category === 'custom') return `${ch.targetValue}x / ${periodNounFor(ch.periodLabel)}`;
-  if(ch.category === 'steps') return `${Number(ch.targetValue).toLocaleString()} steps${ch.stepsMode==='daily' ? ' / day' : ' / ' + periodNounFor(ch.periodLabel)}`;
-  return `${ch.targetValue} ${ch.unit || ''} ${METRIC_FIXED_LABEL[ch.metricKey]||''} / day`.replace(/\s+/g,' ').trim();
+function itemEmoji(item){
+  if(item.category === 'nutrition') return metricStyle(item.metricKey).emoji;
+  return { steps:'👣', custom:'✅', withhold:'🚫' }[item.category] || '🎯';
+}
+function challengeItemTargetLabel(item){
+  if(item.category === 'withhold') return `${item.label} — no slipping`;
+  if(item.category === 'custom') return `${item.label}: ${item.targetValue}x / ${periodNounFor(item.periodLabel)}`;
+  if(item.category === 'steps') return `${item.label}: ${Number(item.targetValue).toLocaleString()}${item.stepsMode==='daily' ? '/day' : '/' + periodNounFor(item.periodLabel)}`;
+  return `${item.label}: ${item.targetValue}${item.unit?' '+item.unit:''}/day`;
+}
+function challengeSummaryLabel(ch){
+  return ch.items.map(it => it.label).join(' · ') || 'No items yet';
 }
 
 // ---- list view ----
-function startNewChallenge(){ challengeDraft = null; render('challenge-new'); }
+function startNewChallenge(){
+  challengeDraft = { title:'', startDate: todayKey(), endDate: dateKey(addDays(new Date(), 30)), items: [], invites: [] };
+  render('challenge-new');
+}
 function viewChallenges(){
   if(myChallenges.length === 0){
     return `
       <div class="empty-state" style="text-align:center;">
         <div style="margin-bottom:18px; font-size:48px;">🏆</div>
         <h2>Start your first challenge</h2>
-        <p style="margin-left:auto; margin-right:auto;">Invite people, pick a shared target, and see who's got the discipline to win it.</p>
+        <p style="margin-left:auto; margin-right:auto;">Invite people, add one or more targets, and see who's got the discipline to win it.</p>
         <button class="btn btn-primary" onclick="startNewChallenge()">Create a challenge</button>
       </div>
     `;
@@ -4916,139 +4938,36 @@ function challengeCardHtml(ch){
   const status = challengeStatus(ch);
   const board = challengeLeaderboard(ch);
   const meIdx = board.findIndex(p => p.userId === currentUser.id);
-  const accent = CATEGORY_ACCENT[ch.category] || 'var(--navy)';
-  const emoji = { nutrition:'🍽️', steps:'👣', custom:'✅', withhold:'🚫' }[ch.category] || '🏆';
   const statusText = status.phase === 'upcoming' ? `Starts in ${status.days}d`
     : status.phase === 'ended' ? 'Challenge ended'
     : `${status.days}d left`;
   return `
-    <div class="goal-card" style="border-left: 4px solid ${accent}; border-top-left-radius:6px; border-bottom-left-radius:6px;" onclick="openChallengeDetail(${jsAttr(ch.id)})">
-      <div class="challenge-card-emoji">${emoji}</div>
+    <div class="goal-card" style="border-left: 4px solid var(--navy); border-top-left-radius:6px; border-bottom-left-radius:6px;" onclick="openChallengeDetail(${jsAttr(ch.id)})">
+      <div class="challenge-card-emoji">🏆</div>
       <div class="info">
         <h3>${ch.title}</h3>
-        <div class="meta">${challengeTargetLabel(ch)} · ${board.length} ${board.length===1?'player':'players'}</div>
+        <div class="meta">${challengeSummaryLabel(ch)} · ${board.length} ${board.length===1?'player':'players'}</div>
         <div class="meta" style="margin-top:4px;">${statusText}${meIdx>=0 ? ` · You're #${meIdx+1} with ${board[meIdx].points} pts` : ''}</div>
       </div>
     </div>
   `;
 }
 
-// ---- creation wizard ----
-function viewChallengeCategory(){
+// ---- creation wizard: name + dates + any number of items + invites ----
+function viewChallengeNew(){
+  const cd = challengeDraft;
   return `
     <div class="wizard-head">
       <div class="back-btn" onclick="render('challenges')">${chevron()}</div>
       <div>
-        <div class="step-title">What kind of challenge?</div>
-        <div class="step-sub">Same four types as goals — everyone competes on the same target.</div>
-      </div>
-    </div>
-    <div class="category-grid">
-      <button class="category-option" onclick="pickChallengeCategory('nutrition')">
-        <div class="icon" style="background:${withOpacity(CATEGORY_ACCENT_HEX.nutrition,0.16)};">${targetGlyph()}</div>
-        <div><h3>Nutrition</h3><p>Everyone hits the same calorie, protein, fat, carb, or water target.</p></div>
-      </button>
-      <button class="category-option" onclick="pickChallengeCategory('steps')">
-        <div class="icon" style="background:${withOpacity(CATEGORY_ACCENT_HEX.steps,0.16)};">${stepsGlyph()}</div>
-        <div><h3>Steps</h3><p>A shared step target — daily, or totaled over a period.</p></div>
-      </button>
-      <button class="category-option" onclick="pickChallengeCategory('custom')">
-        <div class="icon" style="background:${withOpacity(CATEGORY_ACCENT_HEX.custom,0.16)};">${checkGlyph()}</div>
-        <div><h3>Custom</h3><p>Anything else — "workout 4x a week," your call.</p></div>
-      </button>
-      <button class="category-option" onclick="pickChallengeCategory('withhold')">
-        <div class="icon" style="background:${withOpacity(CATEGORY_ACCENT_HEX.withhold,0.12)};">${withholdGlyph()}</div>
-        <div><h3>Abstain</h3><p>Whoever stays cleanest wins — one slip costs that day's points.</p></div>
-      </button>
-    </div>
-  `;
-}
-function pickChallengeCategory(cat){
-  challengeDraft = {
-    category: cat, title: '', invites: [],
-    metricKey: cat === 'nutrition' ? 'calories' : cat,
-    targetValue: '', unit: cat==='nutrition' ? NUTRITION_METRIC_UNIT.calories : '',
-    periodLabel: 'week', customDays: 7, stepsMode: 'daily',
-    startDate: todayKey(), endDate: dateKey(addDays(new Date(), 30))
-  };
-  render('challenge-new-form');
-}
-function periodPickerHtml(includeDay){
-  const cd = challengeDraft;
-  return `
-    <div class="field">
-      <label>Period</label>
-      <select onchange="challengeDraft.periodLabel=this.value; render('challenge-new-form');">
-        ${includeDay ? `<option value="day" ${cd.periodLabel==='day'?'selected':''}>Daily</option>` : ''}
-        <option value="week" ${cd.periodLabel==='week'?'selected':''}>Weekly</option>
-        <option value="month" ${cd.periodLabel==='month'?'selected':''}>Monthly</option>
-        <option value="custom" ${cd.periodLabel==='custom'?'selected':''}>Custom stretch</option>
-      </select>
-    </div>
-    ${cd.periodLabel==='custom' ? `
-      <div class="field">
-        <label>Days per period</label>
-        <input type="number" value="${cd.customDays}" oninput="challengeDraft.customDays=this.value" placeholder="e.g. 10">
-      </div>
-    ` : ''}
-  `;
-}
-function viewChallengeForm(){
-  const cd = challengeDraft;
-  const accent = CATEGORY_ACCENT[cd.category] || 'var(--navy)';
-  let fields = '';
-  if(cd.category === 'nutrition'){
-    fields = `
-      <div class="field">
-        <label>Which target?</label>
-        <select onchange="challengeDraft.metricKey=this.value; challengeDraft.unit=NUTRITION_METRIC_UNIT[this.value]; render('challenge-new-form');">
-          ${['calories','protein','fat','carbs','water'].map(k=>`<option value="${k}" ${cd.metricKey===k?'selected':''}>${METRIC_FIXED_LABEL[k]}</option>`).join('')}
-        </select>
-      </div>
-      <div class="field">
-        <label>Daily target (${cd.unit})</label>
-        <input type="number" value="${cd.targetValue}" oninput="challengeDraft.targetValue=this.value" placeholder="e.g. 2000">
-      </div>
-    `;
-  } else if(cd.category === 'steps'){
-    fields = `
-      <div class="field">
-        <label>Step target</label>
-        <input type="number" value="${cd.targetValue}" oninput="challengeDraft.targetValue=this.value" placeholder="e.g. 8000">
-      </div>
-      <div class="field">
-        <label>Counted how?</label>
-        <select onchange="challengeDraft.stepsMode=this.value; render('challenge-new-form');">
-          <option value="daily" ${cd.stepsMode==='daily'?'selected':''}>Every single day</option>
-          <option value="cumulative" ${cd.stepsMode==='cumulative'?'selected':''}>Total over a period</option>
-        </select>
-      </div>
-      ${cd.stepsMode==='cumulative' ? periodPickerHtml(false) : ''}
-    `;
-  } else if(cd.category === 'custom'){
-    fields = `
-      <div class="field">
-        <label>Target count per period</label>
-        <input type="number" value="${cd.targetValue}" oninput="challengeDraft.targetValue=this.value" placeholder="e.g. 4">
-      </div>
-      ${periodPickerHtml(true)}
-    `;
-  } else {
-    fields = `<div class="tip-card" style="align-items:flex-start;"><span class="tip-text">🚫 No numeric target here — a clean day (no slip logged) earns full points, a slipped day earns none.</span></div>`;
-  }
-  return `
-    <div class="wizard-head">
-      <div class="back-btn" onclick="render('challenge-new')">${chevron()}</div>
-      <div>
-        <div class="step-title">Set it up</div>
-        <div class="step-sub">Everyone in this challenge competes on the same target.</div>
+        <div class="step-title">New challenge</div>
+        <div class="step-sub">Name it, set the dates, then add one or more items to compete on.</div>
       </div>
     </div>
     <div class="field">
       <label>Challenge name</label>
-      <input type="text" value="${cd.title}" oninput="challengeDraft.title=this.value" placeholder="e.g. October Step Showdown">
+      <input type="text" value="${cd.title}" oninput="challengeDraft.title=this.value" placeholder="e.g. October Fitness Sprint">
     </div>
-    ${fields}
     <div class="field">
       <label>Start date</label>
       <input type="date" value="${cd.startDate}" oninput="challengeDraft.startDate=this.value">
@@ -5057,12 +4976,150 @@ function viewChallengeForm(){
       <label>End date</label>
       <input type="date" value="${cd.endDate}" oninput="challengeDraft.endDate=this.value">
     </div>
+    <div class="stat-section-title" style="margin-top:0;">Items</div>
+    ${cd.items.length === 0 ? `<div class="stat-ab-empty">No items yet — add at least one to compete on (mix nutrition, steps, custom, abstain — however you want).</div>` : cd.items.map((it,i)=>challengeItemChipHtml(it,i)).join('')}
+    <button class="btn btn-ghost btn-block" style="margin-bottom:18px;" onclick="openAddChallengeItemModal()">+ Add an item</button>
     ${challengeInvitePanelHtml()}
     <div class="btn-row">
-      <button class="btn btn-primary btn-block" style="background:${accent};" onclick="saveChallengeAndFinish()">Create challenge 🏆</button>
+      <button class="btn btn-primary btn-block" onclick="saveChallengeAndFinish()">Create challenge 🏆</button>
     </div>
   `;
 }
+function challengeItemChipHtml(it, i){
+  const color = it.category === 'nutrition' ? metricStyle(it.metricKey).color : (CATEGORY_ACCENT_HEX[it.category] || 'var(--navy)');
+  const soft = it.category === 'nutrition' ? metricStyle(it.metricKey).soft : withOpacity(CATEGORY_ACCENT_HEX[it.category] || '#1B2A54', 0.12);
+  return `
+    <div class="stat-metric-row" style="background:${soft}; border-left:3px solid ${color};">
+      <div class="stat-metric-label">${itemEmoji(it)} ${challengeItemTargetLabel(it)}</div>
+      <button style="border:none; background:transparent; cursor:pointer; font-size:14px; color:var(--muted);" onclick="removeChallengeItem(${i})">✕</button>
+    </div>
+  `;
+}
+function removeChallengeItem(i){ challengeDraft.items.splice(i,1); render('challenge-new'); }
+
+// ---- add-item modal (used only during creation) ----
+let itemDraftBuffer = null;
+function openAddChallengeItemModal(){
+  itemDraftBuffer = { category:'nutrition', metricKey:'calories', label:'Calories', targetValue:'', unit:NUTRITION_METRIC_UNIT.calories, periodLabel:'week', customDays:7, stepsMode:'daily' };
+  openModal(addChallengeItemModalHtml());
+}
+function itemPeriodPickerHtml(includeDay){
+  const d = itemDraftBuffer;
+  return `
+    <div class="field">
+      <label>Period</label>
+      <select onchange="itemDraftBuffer.periodLabel=this.value; openModal(addChallengeItemModalHtml());">
+        ${includeDay ? `<option value="day" ${d.periodLabel==='day'?'selected':''}>Daily</option>` : ''}
+        <option value="week" ${d.periodLabel==='week'?'selected':''}>Weekly</option>
+        <option value="month" ${d.periodLabel==='month'?'selected':''}>Monthly</option>
+        <option value="custom" ${d.periodLabel==='custom'?'selected':''}>Custom stretch</option>
+      </select>
+    </div>
+    ${d.periodLabel==='custom' ? `
+      <div class="field">
+        <label>Days per period</label>
+        <input type="number" value="${d.customDays}" oninput="itemDraftBuffer.customDays=this.value" placeholder="e.g. 10">
+      </div>
+    ` : ''}
+  `;
+}
+function addChallengeItemModalHtml(){
+  const d = itemDraftBuffer;
+  let fields = '';
+  if(d.category === 'nutrition'){
+    fields = `
+      <div class="field">
+        <label>Which macro?</label>
+        <select onchange="switchItemDraftMetric(this.value)">
+          ${['calories','protein','fat','carbs','water'].map(k=>`<option value="${k}" ${d.metricKey===k?'selected':''}>${METRIC_FIXED_LABEL[k]}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field">
+        <label>Daily target (${d.unit})</label>
+        <input type="number" value="${d.targetValue}" oninput="itemDraftBuffer.targetValue=this.value" placeholder="e.g. 2000">
+      </div>
+    `;
+  } else if(d.category === 'steps'){
+    fields = `
+      <div class="field">
+        <label>Step target</label>
+        <input type="number" value="${d.targetValue}" oninput="itemDraftBuffer.targetValue=this.value" placeholder="e.g. 8000">
+      </div>
+      <div class="field">
+        <label>Counted how?</label>
+        <select onchange="itemDraftBuffer.stepsMode=this.value; openModal(addChallengeItemModalHtml());">
+          <option value="daily" ${d.stepsMode==='daily'?'selected':''}>Every single day</option>
+          <option value="cumulative" ${d.stepsMode==='cumulative'?'selected':''}>Total over a period</option>
+        </select>
+      </div>
+      ${d.stepsMode==='cumulative' ? itemPeriodPickerHtml(false) : ''}
+    `;
+  } else if(d.category === 'custom'){
+    fields = `
+      <div class="field">
+        <label>Item name</label>
+        <input type="text" value="${d.label}" oninput="itemDraftBuffer.label=this.value" placeholder="e.g. Workout">
+      </div>
+      <div class="field">
+        <label>Target count per period</label>
+        <input type="number" value="${d.targetValue}" oninput="itemDraftBuffer.targetValue=this.value" placeholder="e.g. 4">
+      </div>
+      ${itemPeriodPickerHtml(true)}
+    `;
+  } else {
+    fields = `
+      <div class="field">
+        <label>Item name</label>
+        <input type="text" value="${d.label}" oninput="itemDraftBuffer.label=this.value" placeholder="e.g. No smoking">
+      </div>
+      <div class="tip-card" style="align-items:flex-start;"><span class="tip-text">🚫 No numeric target — a clean day (no slip logged) earns full points, a slipped day earns none.</span></div>
+    `;
+  }
+  return `
+    <div class="modal-title">Add an item</div>
+    <div class="field">
+      <label>Type</label>
+      <select onchange="switchItemDraftCategory(this.value)">
+        <option value="nutrition" ${d.category==='nutrition'?'selected':''}>Nutrition</option>
+        <option value="steps" ${d.category==='steps'?'selected':''}>Steps</option>
+        <option value="custom" ${d.category==='custom'?'selected':''}>Custom</option>
+        <option value="withhold" ${d.category==='withhold'?'selected':''}>Abstain</option>
+      </select>
+    </div>
+    ${fields}
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmAddChallengeItem()">Add item</button>
+    </div>
+  `;
+}
+function switchItemDraftCategory(cat){
+  itemDraftBuffer = {
+    category: cat,
+    metricKey: cat === 'nutrition' ? 'calories' : cat,
+    label: cat === 'nutrition' ? 'Calories' : cat === 'steps' ? 'Steps' : '',
+    targetValue: '',
+    unit: cat === 'nutrition' ? NUTRITION_METRIC_UNIT.calories : '',
+    periodLabel: 'week', customDays: 7, stepsMode: 'daily'
+  };
+  openModal(addChallengeItemModalHtml());
+}
+function switchItemDraftMetric(key){
+  itemDraftBuffer.metricKey = key;
+  itemDraftBuffer.label = METRIC_FIXED_LABEL[key];
+  itemDraftBuffer.unit = NUTRITION_METRIC_UNIT[key];
+  openModal(addChallengeItemModalHtml());
+}
+function confirmAddChallengeItem(){
+  const d = itemDraftBuffer;
+  if((d.category === 'custom' || d.category === 'withhold') && !d.label.trim()){ showToast('Give this item a name'); return; }
+  if(d.category !== 'withhold' && (!d.targetValue || parseFloat(d.targetValue) <= 0)){ showToast('Set a target for this item'); return; }
+  challengeDraft.items.push(Object.assign({}, d));
+  itemDraftBuffer = null;
+  closeModal();
+  render('challenge-new');
+}
+
 function challengeInvitePanelHtml(){
   const invites = challengeDraft.invites || [];
   return `
@@ -5103,49 +5160,47 @@ function addChallengeInvite(){
   if(!val) return;
   challengeDraft.invites = challengeDraft.invites || [];
   challengeDraft.invites.push({ firstName, lastName, type, value: val });
-  render('challenge-new-form');
+  render('challenge-new');
 }
-function removeChallengeInvite(j){ challengeDraft.invites.splice(j,1); render('challenge-new-form'); }
+function removeChallengeInvite(j){ challengeDraft.invites.splice(j,1); render('challenge-new'); }
 
 async function saveChallengeAndFinish(){
   const cd = challengeDraft;
   if(!cd.title || !cd.title.trim()){ showToast('Give your challenge a name'); return; }
   if(!cd.startDate || !cd.endDate || cd.endDate < cd.startDate){ showToast('Check your start/end dates'); return; }
-  if(cd.category !== 'withhold' && (!cd.targetValue || parseFloat(cd.targetValue) <= 0)){ showToast('Set a target to compete on'); return; }
-
-  const dbMetricType = clientMetricKeyToDb(cd.category === 'nutrition' ? cd.metricKey : cd.category);
-  const periodType = (cd.category === 'nutrition' || cd.category === 'withhold' || (cd.category==='steps' && cd.stepsMode==='daily'))
-    ? 'daily' : clientPeriodToDb(cd.periodLabel || 'day');
+  if(cd.items.length === 0){ showToast('Add at least one item to compete on'); return; }
 
   showToast('Creating challenge…');
   const { data: chRow, error: chErr } = await sbClient.from('challenges').insert({
-    creator_user_id: currentUser.id,
-    title: cd.title.trim(),
-    category: clientCategoryToDb(cd.category),
-    metric_type: dbMetricType,
-    target_value: cd.category === 'withhold' ? null : parseFloat(cd.targetValue),
-    unit: cd.unit || null,
-    period_type: periodType,
-    custom_period_days: (cd.periodLabel === 'custom') ? (parseInt(cd.customDays) || null) : null,
-    steps_mode: cd.category === 'steps' ? (cd.stepsMode || 'daily') : null,
-    start_date: cd.startDate,
-    end_date: cd.endDate
+    creator_user_id: currentUser.id, title: cd.title.trim(), start_date: cd.startDate, end_date: cd.endDate
   }).select().single();
   if(chErr){ showToast("Couldn't create challenge — " + chErr.message); return; }
 
-  const { error: pErr } = await sbClient.from('challenge_participants').insert({
-    challenge_id: chRow.id, user_id: currentUser.id
-  });
-  if(pErr){ showToast("Couldn't add you as a participant — " + pErr.message); }
+  const { error: pErr } = await sbClient.from('challenge_participants').insert({ challenge_id: chRow.id, user_id: currentUser.id });
+  if(pErr) showToast("Couldn't add you as a participant — " + pErr.message);
+
+  const itemRows = cd.items.map(it => ({
+    challenge_id: chRow.id,
+    category: clientCategoryToDb(it.category),
+    metric_type: clientMetricKeyToDb(it.category === 'nutrition' ? it.metricKey : it.category),
+    label: it.label,
+    target_value: it.category === 'withhold' ? null : parseFloat(it.targetValue),
+    unit: it.unit || null,
+    period_type: (it.category === 'nutrition' || it.category === 'withhold' || (it.category==='steps' && it.stepsMode==='daily')) ? 'daily' : clientPeriodToDb(it.periodLabel || 'week'),
+    custom_period_days: it.periodLabel === 'custom' ? (parseInt(it.customDays) || null) : null,
+    steps_mode: it.category === 'steps' ? (it.stepsMode || 'daily') : null
+  }));
+  const { error: iErr } = await sbClient.from('challenge_items').insert(itemRows);
+  if(iErr){ showToast("Couldn't save items — " + iErr.message); return; }
 
   for(const inv of (cd.invites||[])){
-    const { error: iErr } = await sbClient.from('challenge_invites').insert({
+    const { error: invErr } = await sbClient.from('challenge_invites').insert({
       challenge_id: chRow.id, inviter_user_id: currentUser.id,
       first_name: inv.firstName, last_name: inv.lastName || '',
       contact_type: inv.type === 'phone' ? 'phone' : 'email',
       contact_value: inv.value
     });
-    if(iErr) showToast("Couldn't invite " + inv.firstName + " — " + iErr.message);
+    if(invErr) showToast("Couldn't invite " + inv.firstName + " — " + invErr.message);
   }
 
   await loadChallenges();
@@ -5154,7 +5209,7 @@ async function saveChallengeAndFinish(){
   render('challenges');
 }
 
-// ---- detail view: leaderboard + logging + invite-more ----
+// ---- detail view: per-item logging + combined leaderboard + invite-more ----
 let moreInvitesDraft = [];
 function openChallengeDetail(id){ currentChallengeId = id; moreInvitesDraft = []; render('challenge-detail'); }
 function viewChallengeDetail(){
@@ -5163,7 +5218,6 @@ function viewChallengeDetail(){
   const status = challengeStatus(ch);
   const board = challengeLeaderboard(ch);
   const isCreator = ch.creatorUserId === currentUser.id;
-  const emoji = { nutrition:'🍽️', steps:'👣', custom:'✅', withhold:'🚫' }[ch.category] || '🏆';
   const medals = ['🥇','🥈','🥉'];
   const pendingInvites = ch.invites.filter(i => i.status !== 'accepted');
 
@@ -5171,17 +5225,22 @@ function viewChallengeDetail(){
     <div class="wizard-head">
       <div class="back-btn" onclick="render('challenges')">${chevron()}</div>
       <div>
-        <div class="step-title">${emoji} ${ch.title}</div>
-        <div class="step-sub">${challengeTargetLabel(ch)}</div>
+        <div class="step-title">🏆 ${ch.title}</div>
+        <div class="step-sub">${challengeSummaryLabel(ch)}</div>
       </div>
     </div>
     <div class="challenge-meta-row">
       <span>${status.phase==='upcoming' ? `Starts in <strong>${status.days}d</strong>` : status.phase==='ended' ? '<strong>Ended</strong>' : `<strong>${status.days}d</strong> left`}</span>
       <span>${ch.startDate} → ${ch.endDate}</span>
     </div>
-    <div class="points-key">🏆 Points: 10 for hitting it, 7 for 90%+, 3 for 70%+, 0 below${ch.category==='withhold' ? ' — or 10 for a clean day, 0 for a slip.' : '. Scored live as you log.'}</div>
-    ${status.phase !== 'ended' ? challengeLogTodayHtml(ch) : ''}
-    <div class="stat-section-title" style="margin-top:0;">Leaderboard</div>
+    <div class="points-key">🏆 Each item scores 10 for hitting it, 7 for 90%+, 3 for 70%+, 0 below (10/0 clean-vs-slip for abstain items). Your total is the sum across every item, scored live as you log.</div>
+    ${status.phase !== 'ended' ? `
+      <div class="stat-section-title" style="margin-top:0;">Log today</div>
+      ${ch.items.map(it => challengeItemLogBoxHtml(ch, it)).join('')}
+    ` : ''}
+    <div class="stat-section-title">Items</div>
+    ${ch.items.map(it => `<div class="stat-ab-metric-title">${itemEmoji(it)} ${challengeItemTargetLabel(it)}</div>`).join('')}
+    <div class="stat-section-title">Leaderboard</div>
     ${board.map((p,i) => `
       <div class="leaderboard-row ${p.userId===currentUser.id ? 'is-me' : ''}">
         <div class="leaderboard-rank ${i<3?'medal':''}">${i<3 ? medals[i] : (i+1)}</div>
@@ -5208,63 +5267,62 @@ function viewChallengeDetail(){
     ` : ''}
   `;
 }
-function challengeLogTodayHtml(ch){
-  const myLogs = challengeUserLogs(ch, currentUser.id);
+function challengeItemLogBoxHtml(ch, item){
+  const myLogs = challengeItemUserLogs(ch, item, currentUser.id);
   const today = todayKey();
-  if(ch.category === 'withhold'){
+  const emoji = itemEmoji(item);
+  if(item.category === 'withhold'){
     const slippedToday = myLogs.some(l => l.date === today && l.slipped);
     return `
       <div class="log-today-box">
-        <h4>Today</h4>
+        <h4>${emoji} ${item.label}</h4>
         ${slippedToday
-          ? `<div class="meta">You logged a slip today. That's OK — tomorrow's a clean slate.</div>`
-          : `<div class="meta" style="margin-bottom:10px;">Clean so far today — nothing to log unless you slip.</div>
-             <button class="btn btn-ghost" onclick="logChallengeSlip(${jsAttr(ch.id)})">Log a slip today</button>`
+          ? `<div class="meta">You logged a slip today. Tomorrow's a fresh start.</div>`
+          : `<div class="meta" style="margin-bottom:10px;">Clean so far today.</div>
+             <button class="btn btn-ghost" onclick="logChallengeItemSlip(${jsAttr(ch.id)}, ${jsAttr(item.id)})">Log a slip today</button>`
         }
       </div>
     `;
   }
-  if(ch.category === 'custom'){
+  if(item.category === 'custom'){
     const doneToday = myLogs.some(l => l.date === today);
     return `
       <div class="log-today-box">
-        <h4>Today</h4>
-        ${doneToday ? `<div class="meta">✅ Logged for today.</div>` : `<button class="btn btn-primary btn-block" onclick="logChallengeCheckin(${jsAttr(ch.id)})">Log today's check-in</button>`}
+        <h4>${emoji} ${item.label}</h4>
+        ${doneToday ? `<div class="meta">✅ Logged for today.</div>` : `<button class="btn btn-primary btn-block" onclick="logChallengeItemCheckin(${jsAttr(ch.id)}, ${jsAttr(item.id)})">Log today's check-in</button>`}
       </div>
     `;
   }
-  const label = ch.category === 'nutrition' ? (METRIC_FIXED_LABEL[ch.metricKey] || 'amount') : 'Steps';
-  const unit = ch.unit || '';
   const todaySum = myLogs.filter(l=>l.date===today).reduce((s,l)=>s+(parseFloat(l.value)||0),0);
   return `
     <div class="log-today-box">
-      <h4>Today${todaySum>0 ? ` — logged ${todaySum}${unit?' '+unit:''} so far` : ''}</h4>
+      <h4>${emoji} ${item.label}${todaySum>0 ? ` — logged ${todaySum}${item.unit?' '+item.unit:''} so far` : ''}</h4>
       <div class="log-today-row">
-        <input type="number" id="challenge-log-input" placeholder="${label}${unit ? ' ('+unit+')' : ''}">
-        <button class="btn btn-primary" onclick="logChallengeAmount(${jsAttr(ch.id)})">Log</button>
+        <input type="number" id="challenge-log-input-${item.id}" placeholder="${item.label}${item.unit ? ' ('+item.unit+')' : ''}">
+        <button class="btn btn-primary" onclick="logChallengeItemAmount(${jsAttr(ch.id)}, ${jsAttr(item.id)})">Log</button>
       </div>
     </div>
   `;
 }
-async function logChallengeAmount(challengeId){
-  const input = document.getElementById('challenge-log-input');
+async function logChallengeItemAmount(challengeId, itemId){
+  const input = document.getElementById('challenge-log-input-'+itemId);
   const val = parseFloat(input.value);
   if(!val || val <= 0){ showToast('Enter an amount first'); return; }
-  const { error } = await sbClient.from('challenge_logs').insert({ challenge_id: challengeId, user_id: currentUser.id, log_date: todayKey(), value: val });
+  const { error } = await sbClient.from('challenge_logs').insert({ challenge_id: challengeId, challenge_item_id: itemId, user_id: currentUser.id, log_date: todayKey(), value: val });
   if(error){ showToast("Couldn't log that — " + error.message); return; }
   await loadChallenges();
   showToast('Logged 🎉');
   render('challenge-detail');
 }
-async function logChallengeCheckin(challengeId){
-  const { error } = await sbClient.from('challenge_logs').insert({ challenge_id: challengeId, user_id: currentUser.id, log_date: todayKey(), value: 1 });
+async function logChallengeItemCheckin(challengeId, itemId){
+  const { error } = await sbClient.from('challenge_logs').insert({ challenge_id: challengeId, challenge_item_id: itemId, user_id: currentUser.id, log_date: todayKey(), value: 1 });
   if(error){ showToast("Couldn't log that — " + error.message); return; }
   await loadChallenges();
   showToast('Logged 🎉');
   render('challenge-detail');
 }
-async function logChallengeSlip(challengeId){
-  const { error } = await sbClient.from('challenge_logs').insert({ challenge_id: challengeId, user_id: currentUser.id, log_date: todayKey(), slipped: true });
+async function logChallengeItemSlip(challengeId, itemId){
+  const { error } = await sbClient.from('challenge_logs').insert({ challenge_id: challengeId, challenge_item_id: itemId, user_id: currentUser.id, log_date: todayKey(), slipped: true });
   if(error){ showToast("Couldn't log that — " + error.message); return; }
   await loadChallenges();
   showToast('Logged — tomorrow is a fresh start');
@@ -5326,6 +5384,7 @@ async function sendMoreChallengeInvites(){
   showToast('Invites sent');
   render('challenge-detail');
 }
+
 
 function handleLogout(){
   signOut();
