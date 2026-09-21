@@ -2991,7 +2991,7 @@ function statBoxPairHtml(current, longest, unitWord, accentHex){
       <div class="stat-box" style="background:${withOpacity(accentHex, 0.12)};">
         <div class="stat-box-emoji">🏆</div>
         <div class="stat-box-num" style="color:${accentHex};">${longest}</div>
-        <div class="stat-box-label">Best ${unitWord}${longest===1?'':'s'}</div>
+        <div class="stat-box-label">Longest streak</div>
       </div>
     </div>
   `;
@@ -3046,7 +3046,10 @@ function metricAbRowsHtml(goalId, metricKey){
   return invites.map(inv => `
     <div class="ab-person-row">
       <span>${inv.firstName}${inv.lastName ? ' ' + inv.lastName : ''}</span>
-      ${abInviteStatusBadgeHtml(inv.status)}
+      <span style="display:flex; align-items:center; gap:8px;">
+        ${abInviteStatusBadgeHtml(inv.status)}
+        ${(inv.status==='pending' || inv.status==='accepted') ? `<button class="btn-text" style="font-size:12px; color:var(--danger); padding:0;" onclick="confirmRemoveAbBuddy(${jsAttr(inv.inviteId)}, ${jsAttr(inv.firstName)}, () => openGoalStatsModal(${jsAttr(goalId)}))">Remove</button>` : ''}
+      </span>
     </div>
   `).join('');
 }
@@ -4762,7 +4765,10 @@ function profileAbSectionHtml(){
             ${x.people.map(p => `
               <div class="ab-person-row">
                 <span>${p.firstName}${p.lastName ? ' ' + p.lastName : ''}</span>
-                ${abInviteStatusBadgeHtml(p.status)}
+                <span style="display:flex; align-items:center; gap:8px;">
+                  ${abInviteStatusBadgeHtml(p.status)}
+                  ${(p.status==='pending' || p.status==='accepted') ? `<button class="btn-text" style="font-size:12px; color:var(--danger); padding:0;" onclick="confirmRemoveAbBuddy(${jsAttr(p.inviteId)}, ${jsAttr(p.firstName)}, () => render('profile'))">Remove</button>` : ''}
+                </span>
               </div>
             `).join('')}
           </div>
@@ -4783,6 +4789,40 @@ function abInviteStatusBadgeHtml(status){
   };
   const s = map[status] || map.pending;
   return `<span class="status-badge ${status==='accepted' ? 'status-accepted' : ''}" style="${s.style}">${s.label}</span>`;
+}
+// Cancels a still-pending invite, or ends an already-accepted AB
+// relationship — same action either way from the person's point of view
+// ("stop this person being my AB here"), so one flow covers both. Reuses
+// the existing 'revoked' status rather than deleting the invite row, so
+// the history stays visible instead of just vanishing. onDone lets each
+// caller decide how to refresh afterward: reopen the same stats modal,
+// or re-render the Profile page.
+function confirmRemoveAbBuddy(inviteId, name, onDone){
+  confirmModal(
+    `Remove ${name}?`,
+    "They'll stop being able to see this goal, and the invite will show as revoked. You can always invite someone new.",
+    async () => { await removeAbBuddy(inviteId); onDone(); }
+  );
+}
+async function removeAbBuddy(inviteId){
+  const { data: invite, error: fetchErr } = await sbClient.from('ab_invites')
+    .select('goal_metric_id, accepted_by_user_id').eq('id', inviteId).single();
+  if(fetchErr){ showToast("Couldn't find that invite — " + fetchErr.message); return; }
+
+  const { error: updErr } = await sbClient.from('ab_invites').update({ status: 'revoked' }).eq('id', inviteId);
+  if(updErr){ showToast("Couldn't remove — " + updErr.message); return; }
+
+  if(invite.accepted_by_user_id){
+    const { error: relErr } = await sbClient.from('ab_relationships')
+      .update({ active: false })
+      .eq('goal_metric_id', invite.goal_metric_id)
+      .eq('ab_user_id', invite.accepted_by_user_id);
+    if(relErr) showToast("Removed the invite, but couldn't fully deactivate the relationship — " + relErr.message);
+  }
+
+  await loadSupportingRelationships();
+  await loadMyAbInvites();
+  showToast('Removed');
 }
 // Simulated preview only — no backend scheduler exists in this browser-only
 // prototype to actually run a 60-day timer. Derives a deterministic cycle
