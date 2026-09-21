@@ -1606,6 +1606,111 @@ function dbChallengeToClient(row){
   };
 }
 
+// ---------------------------------------------------------------------
+// FUELFAM CONNECTION — links one Amigoal account to one FuelFam profile
+// (self-serve "pick your name, confirm it's you" — no password involved,
+// since FuelFam's own password storage isn't a real hash), then pulls
+// nutrition logs across on demand via the sync-fuelfam-nutrition Edge
+// Function. Deliberately a separate, opt-in step per person rather than
+// anything automatic, since this is someone else's personal food log.
+// ---------------------------------------------------------------------
+let fuelfamLink = null;
+async function loadFuelfamLink(){
+  if(!currentUser){ fuelfamLink = null; return; }
+  const { data, error } = await sbClient.from('fuelfam_links').select('*').eq('amigoal_user_id', currentUser.id).maybeSingle();
+  if(error){ fuelfamLink = null; return; }
+  fuelfamLink = data ? { id: data.id, fuelfamUsername: data.fuelfam_username, lastSyncedAt: data.last_synced_at } : null;
+}
+async function openFuelfamConnectModal(){
+  showToast('Loading FuelFam names…');
+  const { data, error } = await sbClient.functions.invoke('fuelfam-profiles', { body: {} });
+  if(error || !data || data.error){
+    showToast("Couldn't load FuelFam names — " + (data?.error || error.message));
+    return;
+  }
+  const profiles = data.profiles || [];
+  if(profiles.length === 0){
+    showToast('No unclaimed FuelFam names left to connect');
+    return;
+  }
+  chooseModal(
+    'Which FuelFam name is you?',
+    profiles.map(p => ({ value: p.id, label: p.name || p.username })),
+    (profileId) => confirmFuelfamConnect(profileId, profiles.find(p => p.id === profileId)),
+    "Pick your own name from FuelFam's list. This just links the two accounts — no password needed."
+  );
+}
+function confirmFuelfamConnect(profileId, profile){
+  confirmModal(
+    `Connect as ${profile.name || profile.username}?`,
+    "This links your Amigoal account to that FuelFam profile so you can pull your nutrition logs across. You can disconnect any time from your Profile.",
+    () => doFuelfamConnect(profileId, profile.username)
+  );
+}
+async function doFuelfamConnect(profileId, username){
+  const { error } = await sbClient.from('fuelfam_links').insert({
+    amigoal_user_id: currentUser.id, fuelfam_profile_id: profileId, fuelfam_username: username
+  });
+  if(error){ showToast("Couldn't connect — " + error.message); return; }
+  await loadFuelfamLink();
+  showToast('Connected to FuelFam 🎉');
+  render('profile');
+}
+function confirmFuelfamDisconnect(){
+  confirmModal(
+    'Disconnect FuelFam?',
+    "You can reconnect any time. Nutrition entries already synced over stay in your log.",
+    doFuelfamDisconnect
+  );
+}
+async function doFuelfamDisconnect(){
+  const { error } = await sbClient.from('fuelfam_links').delete().eq('amigoal_user_id', currentUser.id);
+  if(error){ showToast("Couldn't disconnect — " + error.message); return; }
+  await loadFuelfamLink();
+  showToast('Disconnected');
+  render('profile');
+}
+async function syncFuelfamNow(){
+  showToast('Syncing from FuelFam…');
+  const { data, error } = await sbClient.functions.invoke('sync-fuelfam-nutrition', { body: {} });
+  if(error || !data || data.error){
+    showToast("Sync failed — " + (data?.error || error.message));
+    return;
+  }
+  await loadFuelfamLink();
+  await loadGoalsFromSupabase();
+  if(!data.hasNutritionGoal){
+    showToast("Synced, but you don't have a nutrition goal yet to log food into");
+  } else if(data.foodInserted === 0 && data.waterInserted === 0){
+    showToast('Up to date — nothing new since last sync');
+  } else {
+    showToast(`Synced ${data.foodInserted} food ${data.foodInserted===1?'item':'items'}${data.waterInserted ? ` + ${data.waterInserted} water ${data.waterInserted===1?'day':'days'}` : ''} 🎉`);
+  }
+  render(currentView);
+}
+function profileFuelfamSectionHtml(){
+  if(!fuelfamLink){
+    return `
+      <div class="profile-section">
+        <h2>FuelFam</h2>
+        <p class="empty-inline" style="margin-bottom:10px;">Pull your nutrition logs over from FuelFam automatically.</p>
+        <button class="btn btn-primary btn-block" onclick="openFuelfamConnectModal()">Connect FuelFam</button>
+      </div>
+    `;
+  }
+  const lastSync = fuelfamLink.lastSyncedAt ? new Date(fuelfamLink.lastSyncedAt).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : 'Never';
+  return `
+    <div class="profile-section">
+      <h2>FuelFam</h2>
+      <p class="empty-inline" style="margin-bottom:10px;">Connected as <strong>${fuelfamLink.fuelfamUsername}</strong> · Last synced: ${lastSync}</p>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="syncFuelfamNow()" style="flex:1;">Sync now</button>
+        <button class="btn btn-ghost" onclick="confirmFuelfamDisconnect()" style="flex:1;">Disconnect</button>
+      </div>
+    </div>
+  `;
+}
+
 function loadNotifications(){
   try{
     const raw = localStorage.getItem('amigoal_notifications_demo');
@@ -1784,6 +1889,7 @@ async function processPendingInvite(){
     await loadSupportingRelationships();
     await loadMyAbInvites();
     await loadChallenges();
+    await loadFuelfamLink();
     openModal(`
       <div class="modal-title">You're in! 🎉</div>
       <div class="modal-desc" style="text-align:left; line-height:1.5;">
@@ -1858,6 +1964,7 @@ async function checkAuthAndProceed(){
     await loadSupportingRelationships();
     await loadMyAbInvites();
     await loadChallenges();
+    await loadFuelfamLink();
     proceedAfterAuth();
   } else {
     showAuthScreen('login');
@@ -1937,6 +2044,7 @@ async function submitSignUp(){
     await loadSupportingRelationships();
     await loadMyAbInvites();
     await loadChallenges();
+    await loadFuelfamLink();
     proceedAfterAuth();
   } else {
     // signUp() itself decided to withhold a session and would normally ask
@@ -1956,6 +2064,7 @@ async function submitSignUp(){
       await loadSupportingRelationships();
       await loadMyAbInvites();
       await loadChallenges();
+      await loadFuelfamLink();
       proceedAfterAuth();
     } else {
       // Genuinely could not get a session — now it's a real dead end worth
@@ -1981,6 +2090,7 @@ async function submitLogIn(){
   await loadSupportingRelationships();
   await loadMyAbInvites();
   await loadChallenges();
+  await loadFuelfamLink();
   proceedAfterAuth();
 }
 
@@ -4117,6 +4227,7 @@ function viewProfile(){
     ${profileGoalsListSectionHtml()}
     ${profileStatsSectionHtml(ng)}
     ${ng ? profileDailyGoalsSectionHtml(ng) : ''}
+    ${profileFuelfamSectionHtml()}
     ${profileAbSectionHtml()}
     ${profileWeightHistorySectionHtml(ng)}
 
