@@ -5000,8 +5000,7 @@ function removeChallengeItem(i){ challengeDraft.items.splice(i,1); render('chall
 // ---- add-item modal (used only during creation) ----
 let itemDraftBuffer = null;
 function openAddChallengeItemModal(){
-  itemDraftBuffer = { category:'nutrition', metricKey:'calories', label:'Calories', targetValue:'', unit:NUTRITION_METRIC_UNIT.calories, periodLabel:'week', customDays:7, stepsMode:'daily' };
-  openModal(addChallengeItemModalHtml());
+  switchItemDraftCategory('nutrition');
 }
 function itemPeriodPickerHtml(includeDay){
   const d = itemDraftBuffer;
@@ -5023,22 +5022,114 @@ function itemPeriodPickerHtml(includeDay){
     ` : ''}
   `;
 }
+// Nutrition items use the SAME DRI calculator goals already use (sex,
+// age, height/weight, activity, direction -> calculateDRI()), then show
+// all 5 macros as toggleable cards, exactly like a goal's nutrition
+// results screen — a blank "daily target" number field was the wrong UI
+// for something that should be calculated, not guessed.
+function nutritionItemFieldsHtml(){
+  const d = itemDraftBuffer;
+  const canCalc = d.sex && d.age && d.activity && d.direction &&
+    (nutritionUnits==='us' ? (d.heightFt && d.weightLb) : (d.heightCm && d.weightKg));
+  return `
+    <div class="unit-toggle">
+      <button class="${nutritionUnits==='us'?'active':''}" onclick="setChallengeNutritionUnits('us')">US (lb, ft/in)</button>
+      <button class="${nutritionUnits==='metric'?'active':''}" onclick="setChallengeNutritionUnits('metric')">Metric (kg, cm)</button>
+    </div>
+    <div class="field">
+      <label>Sex</label>
+      <div class="pill-group">
+        <button class="pill ${d.sex==='female'?'active':''}" onclick="setItemDraftField('sex','female')">Female</button>
+        <button class="pill ${d.sex==='male'?'active':''}" onclick="setItemDraftField('sex','male')">Male</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Age</label>
+      <input type="number" placeholder="Years" value="${d.age}" oninput="itemDraftBuffer.age=this.value">
+    </div>
+    ${nutritionUnits==='us' ? `
+      <div class="row-2">
+        <div class="field">
+          <label>Height</label>
+          <div style="display:flex; gap:8px;">
+            <input type="number" placeholder="ft" value="${d.heightFt}" oninput="itemDraftBuffer.heightFt=this.value">
+            <input type="number" placeholder="in" value="${d.heightIn}" oninput="itemDraftBuffer.heightIn=this.value">
+          </div>
+        </div>
+        <div class="field"><label>Weight</label><input type="number" placeholder="lb" value="${d.weightLb}" oninput="itemDraftBuffer.weightLb=this.value"></div>
+      </div>
+    ` : `
+      <div class="row-2">
+        <div class="field"><label>Height</label><input type="number" placeholder="cm" value="${d.heightCm}" oninput="itemDraftBuffer.heightCm=this.value"></div>
+        <div class="field"><label>Weight</label><input type="number" placeholder="kg" value="${d.weightKg}" oninput="itemDraftBuffer.weightKg=this.value"></div>
+      </div>
+    `}
+    <div class="field">
+      <label>Activity level</label>
+      <div class="pill-group">
+        ${['inactive','low_active','active','very_active'].map(lvl => `<button class="pill ${d.activity===lvl?'active':''}" onclick="setItemDraftField('activity','${lvl}')">${activityLabel(lvl)}</button>`).join('')}
+      </div>
+    </div>
+    <div class="field">
+      <label>Target direction</label>
+      <div class="pill-group">
+        <button class="pill ${d.direction==='lose'?'active':''}" onclick="setItemDraftField('direction','lose')">Lose weight</button>
+        <button class="pill ${d.direction==='maintain'?'active':''}" onclick="setItemDraftField('direction','maintain')">Maintain</button>
+        <button class="pill ${d.direction==='gain'?'active':''}" onclick="setItemDraftField('direction','gain')">Gain weight</button>
+      </div>
+    </div>
+    <div class="hint" style="margin-bottom:10px;">This calculates a starting point, used as the shared target for everyone in the challenge — every number below is still editable before you add it.</div>
+    <button class="btn btn-ghost btn-block" style="margin-bottom:14px;" onclick="calculateChallengeNutrition()" ${canCalc ? '' : 'disabled'}>Calculate suggested targets</button>
+    ${d.calculated ? nutritionMacroChecklistHtml() : ''}
+  `;
+}
+function nutritionMacroChecklistHtml(){
+  const d = itemDraftBuffer;
+  const alreadyAdded = new Set(challengeDraft.items.filter(it => it.category === 'nutrition').map(it => it.metricKey));
+  const remaining = ['calories','protein','fat','carbs','water'].filter(k => !alreadyAdded.has(k));
+  if(remaining.length === 0) return `<div class="stat-ab-empty">All 5 macros are already in this challenge.</div>`;
+  return remaining.map(key => {
+    const m = d.macros[key];
+    const style = metricStyle(key);
+    return `
+      <div class="metric-card ${m.checked ? '' : 'disabled'}" style="border-left: 4px solid ${style.color};">
+        <div class="metric-head">
+          <div>
+            <div class="metric-name">${style.emoji} ${METRIC_FIXED_LABEL[key]}</div>
+            <div class="metric-value-row">
+              <input type="number" value="${m.value}" ${m.checked?'':'disabled'} style="color:${style.color};" oninput="itemDraftBuffer.macros['${key}'].value=this.value">
+              <span class="metric-unit">${NUTRITION_METRIC_UNIT[key]} / day</span>
+            </div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" ${m.checked?'checked':''} onchange="toggleItemMacro('${key}')">
+            <span class="track"></span>
+          </label>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+function setChallengeNutritionUnits(u){ nutritionUnits = u; openModal(addChallengeItemModalHtml()); }
+function setItemDraftField(key, val){ itemDraftBuffer[key] = val; openModal(addChallengeItemModalHtml()); }
+function calculateChallengeNutrition(){
+  const r = calculateDRI(itemDraftBuffer);
+  const d = itemDraftBuffer;
+  d.macros.calories.value = r.calories;
+  d.macros.protein.value = r.proteinG;
+  d.macros.fat.value = r.fatG;
+  d.macros.carbs.value = r.carbG;
+  d.macros.water.value = r.waterOz;
+  ['calories','protein','fat','carbs','water'].forEach(k => { d.macros[k].checked = true; });
+  d.calculated = true;
+  openModal(addChallengeItemModalHtml());
+}
+function toggleItemMacro(key){ itemDraftBuffer.macros[key].checked = !itemDraftBuffer.macros[key].checked; openModal(addChallengeItemModalHtml()); }
 function addChallengeItemModalHtml(){
   const d = itemDraftBuffer;
   let fields = '';
   if(d.category === 'nutrition'){
-    fields = `
-      <div class="field">
-        <label>Which macro?</label>
-        <select onchange="switchItemDraftMetric(this.value)">
-          ${['calories','protein','fat','carbs','water'].map(k=>`<option value="${k}" ${d.metricKey===k?'selected':''}>${METRIC_FIXED_LABEL[k]}</option>`).join('')}
-        </select>
-      </div>
-      <div class="field">
-        <label>Daily target (${d.unit})</label>
-        <input type="number" value="${d.targetValue}" oninput="itemDraftBuffer.targetValue=this.value" placeholder="e.g. 2000">
-      </div>
-    `;
+    fields = nutritionItemFieldsHtml();
   } else if(d.category === 'steps'){
     fields = `
       <div class="field">
@@ -5089,29 +5180,57 @@ function addChallengeItemModalHtml(){
     ${fields}
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="confirmAddChallengeItem()">Add item</button>
+      <button class="btn btn-primary" onclick="confirmAddChallengeItem()">${d.category==='nutrition' ? 'Add checked macros' : 'Add item'}</button>
     </div>
   `;
 }
 function switchItemDraftCategory(cat){
-  itemDraftBuffer = {
-    category: cat,
-    metricKey: cat === 'nutrition' ? 'calories' : cat,
-    label: cat === 'nutrition' ? 'Calories' : cat === 'steps' ? 'Steps' : '',
-    targetValue: '',
-    unit: cat === 'nutrition' ? NUTRITION_METRIC_UNIT.calories : '',
-    periodLabel: 'week', customDays: 7, stepsMode: 'daily'
-  };
-  openModal(addChallengeItemModalHtml());
-}
-function switchItemDraftMetric(key){
-  itemDraftBuffer.metricKey = key;
-  itemDraftBuffer.label = METRIC_FIXED_LABEL[key];
-  itemDraftBuffer.unit = NUTRITION_METRIC_UNIT[key];
+  if(cat === 'nutrition'){
+    itemDraftBuffer = {
+      category: 'nutrition',
+      sex: null, age: '', heightFt: '', heightIn: '', heightCm: '', weightLb: '', weightKg: '', activity: null, direction: null,
+      calculated: false,
+      macros: {
+        calories: { checked:false, value:'' },
+        protein: { checked:false, value:'' },
+        fat: { checked:false, value:'' },
+        carbs: { checked:false, value:'' },
+        water: { checked:false, value:'' }
+      }
+    };
+  } else {
+    itemDraftBuffer = {
+      category: cat,
+      metricKey: cat,
+      label: cat === 'steps' ? 'Steps' : '',
+      targetValue: '',
+      unit: '',
+      periodLabel: 'week', customDays: 7, stepsMode: 'daily'
+    };
+  }
   openModal(addChallengeItemModalHtml());
 }
 function confirmAddChallengeItem(){
   const d = itemDraftBuffer;
+  if(d.category === 'nutrition'){
+    if(!d.calculated){ showToast('Calculate targets first'); return; }
+    const checked = ['calories','protein','fat','carbs','water'].filter(k => d.macros[k].checked);
+    if(checked.length === 0){ showToast('Check at least one macro to include'); return; }
+    for(const key of checked){
+      if(!d.macros[key].value || parseFloat(d.macros[key].value) <= 0){ showToast(`Set a valid target for ${METRIC_FIXED_LABEL[key]}`); return; }
+    }
+    checked.forEach(key => {
+      challengeDraft.items.push({
+        category: 'nutrition', metricKey: key, label: METRIC_FIXED_LABEL[key],
+        targetValue: d.macros[key].value, unit: NUTRITION_METRIC_UNIT[key],
+        periodLabel: 'day', customDays: null, stepsMode: null
+      });
+    });
+    itemDraftBuffer = null;
+    closeModal();
+    render('challenge-new');
+    return;
+  }
   if((d.category === 'custom' || d.category === 'withhold') && !d.label.trim()){ showToast('Give this item a name'); return; }
   if(d.category !== 'withhold' && (!d.targetValue || parseFloat(d.targetValue) <= 0)){ showToast('Set a target for this item'); return; }
   challengeDraft.items.push(Object.assign({}, d));
