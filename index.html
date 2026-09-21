@@ -752,6 +752,16 @@
   .log-today-row{ display:flex; gap: 8px; }
   .log-today-row input{ flex:1; }
   .invite-chip-list{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom: 10px; }
+  .points-edit-card{
+    border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; background: var(--paper);
+  }
+  .points-edit-title{ font-size: 13.5px; font-weight:700; color: var(--ink); margin-bottom: 8px; }
+  .points-edit-row{ display:flex; align-items:center; justify-content:space-between; gap: 10px; margin-bottom: 6px; }
+  .points-edit-row:last-child{ margin-bottom: 0; }
+  .points-edit-row label{ font-size: 12.5px; color: var(--muted); font-weight:600; }
+  .points-edit-row input{
+    width: 70px; padding: 7px 8px; border-radius: 8px; border: 1.5px solid var(--line); font-size: 13.5px; text-align:center;
+  }
 
   .weight-history-empty{
     text-align:center;
@@ -1591,7 +1601,11 @@ function dbChallengeToClient(row){
     unit: it.unit,
     periodLabel: dbPeriodToClient(it.period_type),
     customDays: it.custom_period_days,
-    stepsMode: it.steps_mode
+    stepsMode: it.steps_mode,
+    ptsFull: it.pts_full,
+    ptsNinety: it.pts_ninety,
+    ptsSeventy: it.pts_seventy,
+    ptsBelow: it.pts_below
   }));
   const logs = (row.challenge_logs || []).map(l => ({ userId: l.user_id, itemId: l.challenge_item_id, date: l.log_date, value: l.value, slipped: l.slipped }));
   const invites = (row.challenge_invites || []).map(i => ({ id: i.id, firstName: i.first_name, lastName: i.last_name, status: i.status, contactType: i.contact_type }));
@@ -2554,7 +2568,14 @@ function render(view, payload){
   else if(view === 'log') app.innerHTML = viewLog();
   else if(view === 'supporting') app.innerHTML = viewSupporting();
   else if(view === 'challenges') app.innerHTML = viewChallenges();
-  else if(view === 'challenge-new') app.innerHTML = viewChallengeNew();
+  else if(view === 'challenge-new-name') app.innerHTML = viewChallengeNewName();
+  else if(view === 'challenge-new-type') app.innerHTML = viewChallengeNewType();
+  else if(view === 'challenge-new-nutrition') app.innerHTML = viewChallengeNewNutrition();
+  else if(view === 'challenge-new-steps') app.innerHTML = viewChallengeNewSteps();
+  else if(view === 'challenge-new-custom') app.innerHTML = viewChallengeNewCustom();
+  else if(view === 'challenge-new-withhold') app.innerHTML = viewChallengeNewWithhold();
+  else if(view === 'challenge-new-points') app.innerHTML = viewChallengeNewPoints();
+  else if(view === 'challenge-new-invite') app.innerHTML = viewChallengeNewInvite();
   else if(view === 'challenge-detail') app.innerHTML = viewChallengeDetail();
   renderNav();
   animateCountUps();
@@ -4981,11 +5002,14 @@ function profileWeightHistorySectionHtml(ng){
 const NUTRITION_METRIC_UNIT = { calories:'kcal', protein:'g', fat:'g', carbs:'g', water:'fl oz' };
 
 // ---- points engine (pure — no DOM) ----
-function challengeTierPoints(pct){
-  if(pct >= 1) return 10;
-  if(pct >= 0.9) return 7;
-  if(pct >= 0.7) return 3;
-  return 0;
+// Tiers are per-item now (item.ptsFull/ptsNinety/ptsSeventy/ptsBelow),
+// editable by the creator — no more single hardcoded 10/7/3/0 for
+// everyone. Defaults match that same scale until edited.
+function challengeTierPointsForItem(item, pct){
+  if(pct >= 1) return item.ptsFull;
+  if(pct >= 0.9) return item.ptsNinety;
+  if(pct >= 0.7) return item.ptsSeventy;
+  return item.ptsBelow;
 }
 function challengeItemUserLogs(ch, item, userId){
   return ch.logs.filter(l => l.userId === userId && l.itemId === item.id);
@@ -4996,11 +5020,11 @@ function getChallengeItemPeriodWindow(ch, item, refDateStr){
 function challengeItemDailyPoints(item, logs, dateStr){
   if(item.category === 'withhold'){
     const slipped = logs.some(l => l.date === dateStr && l.slipped);
-    return slipped ? 0 : 10;
+    return slipped ? item.ptsBelow : item.ptsFull;
   }
   const val = logs.filter(l => l.date === dateStr).reduce((s,l) => s + (parseFloat(l.value)||0), 0);
   const pct = item.targetValue > 0 ? val / item.targetValue : 0;
-  return challengeTierPoints(pct);
+  return challengeTierPointsForItem(item, pct);
 }
 function challengeItemPointsForUser(ch, item, userId){
   const logs = challengeItemUserLogs(ch, item, userId);
@@ -5031,7 +5055,7 @@ function challengeItemPointsForUser(ch, item, userId){
       achieved = logs.filter(l => l.date >= win.start && l.date <= cappedEnd).reduce((s,l) => s + (parseFloat(l.value)||0), 0);
     }
     const pct = item.targetValue > 0 ? achieved / item.targetValue : 0;
-    total += challengeTierPoints(pct);
+    total += challengeTierPointsForItem(item, pct);
     if(win.end >= endKey) break;
     cursor = addDays(parseDateKey(win.end), 1);
   }
@@ -5069,55 +5093,23 @@ function challengeSummaryLabel(ch){
 // ---- list view ----
 function startNewChallenge(){
   challengeDraft = { title:'', startDate: todayKey(), endDate: dateKey(addDays(new Date(), 30)), items: [], invites: [] };
-  render('challenge-new');
-}
-function viewChallenges(){
-  if(myChallenges.length === 0){
-    return `
-      <div class="empty-state" style="text-align:center;">
-        <div style="margin-bottom:18px; font-size:48px;">🏆</div>
-        <h2>Start your first challenge</h2>
-        <p style="margin-left:auto; margin-right:auto;">Invite people, add one or more targets, and see who's got the discipline to win it.</p>
-        <button class="btn btn-primary" onclick="startNewChallenge()">Create a challenge</button>
-      </div>
-    `;
-  }
-  const cards = myChallenges.map(challengeCardHtml).join('');
-  return `${cards}<button class="btn btn-ghost btn-block" onclick="startNewChallenge()" style="margin-top:8px;">Create another challenge</button>`;
-}
-function challengeCardHtml(ch){
-  const status = challengeStatus(ch);
-  const board = challengeLeaderboard(ch);
-  const meIdx = board.findIndex(p => p.userId === currentUser.id);
-  const statusText = status.phase === 'upcoming' ? `Starts in ${status.days}d`
-    : status.phase === 'ended' ? 'Challenge ended'
-    : `${status.days}d left`;
-  return `
-    <div class="goal-card" style="border-left: 4px solid var(--navy); border-top-left-radius:6px; border-bottom-left-radius:6px;" onclick="openChallengeDetail(${jsAttr(ch.id)})">
-      <div class="challenge-card-emoji">🏆</div>
-      <div class="info">
-        <h3>${ch.title}</h3>
-        <div class="meta">${challengeSummaryLabel(ch)} · ${board.length} ${board.length===1?'player':'players'}</div>
-        <div class="meta" style="margin-top:4px;">${statusText}${meIdx>=0 ? ` · You're #${meIdx+1} with ${board[meIdx].points} pts` : ''}</div>
-      </div>
-    </div>
-  `;
+  render('challenge-new-name');
 }
 
-// ---- creation wizard: name + dates + any number of items + invites ----
-function viewChallengeNew(){
+// ---- Step 1: name + dates ----
+function viewChallengeNewName(){
   const cd = challengeDraft;
   return `
     <div class="wizard-head">
       <div class="back-btn" onclick="render('challenges')">${chevron()}</div>
       <div>
-        <div class="step-title">New challenge</div>
-        <div class="step-sub">Name it, set the dates, then add one or more items to compete on.</div>
+        <div class="step-title">Step 1: Name your contest</div>
+        <div class="step-sub">What should everyone call this challenge, and when does it run?</div>
       </div>
     </div>
     <div class="field">
       <label>Challenge name</label>
-      <input type="text" value="${cd.title}" oninput="challengeDraft.title=this.value" placeholder="e.g. October Fitness Sprint">
+      <input type="text" value="${cd.title}" placeholder="e.g. October Fitness Sprint" oninput="challengeDraft.title=this.value">
     </div>
     <div class="field">
       <label>Start date</label>
@@ -5127,38 +5119,77 @@ function viewChallengeNew(){
       <label>End date</label>
       <input type="date" value="${cd.endDate}" oninput="challengeDraft.endDate=this.value">
     </div>
-    <div class="stat-section-title" style="margin-top:0;">Items</div>
-    ${cd.items.length === 0 ? `<div class="stat-ab-empty">No items yet — add at least one to compete on (mix nutrition, steps, custom, abstain — however you want).</div>` : cd.items.map((it,i)=>challengeItemChipHtml(it,i)).join('')}
-    <button class="btn btn-ghost btn-block" style="margin-bottom:18px;" onclick="openAddChallengeItemModal()">+ Add an item</button>
-    ${challengeInvitePanelHtml()}
     <div class="btn-row">
-      <button class="btn btn-primary btn-block" onclick="saveChallengeAndFinish()">Create challenge 🏆</button>
+      <button class="btn btn-primary btn-block" onclick="confirmChallengeName()">Next →</button>
     </div>
   `;
 }
-function challengeItemChipHtml(it, i){
-  const color = it.category === 'nutrition' ? metricStyle(it.metricKey).color : (CATEGORY_ACCENT_HEX[it.category] || 'var(--navy)');
-  const soft = it.category === 'nutrition' ? metricStyle(it.metricKey).soft : withOpacity(CATEGORY_ACCENT_HEX[it.category] || '#1B2A54', 0.12);
-  return `
-    <div class="stat-metric-row" style="background:${soft}; border-left:3px solid ${color};">
-      <div class="stat-metric-label">${itemEmoji(it)} ${challengeItemTargetLabel(it)}</div>
-      <button style="border:none; background:transparent; cursor:pointer; font-size:14px; color:var(--muted);" onclick="removeChallengeItem(${i})">✕</button>
-    </div>
-  `;
+function confirmChallengeName(){
+  const cd = challengeDraft;
+  if(!cd.title || !cd.title.trim()){ showToast('Give your challenge a name'); return; }
+  if(!cd.startDate || !cd.endDate || cd.endDate < cd.startDate){ showToast('Check your start/end dates'); return; }
+  render('challenge-new-type');
 }
-function removeChallengeItem(i){ challengeDraft.items.splice(i,1); render('challenge-new'); }
 
-// ---- add-item modal (used only during creation) ----
-let itemDraftBuffer = null;
-function openAddChallengeItemModal(){
-  switchItemDraftCategory('nutrition');
+// ---- Step 2: what type of item ----
+function viewChallengeNewType(){
+  return `
+    <div class="wizard-head">
+      <div class="back-btn" onclick="render('challenge-new-name')">${chevron()}</div>
+      <div>
+        <div class="step-title">What type of contest?</div>
+        <div class="step-sub">Pick one — you can add more areas after this one.</div>
+      </div>
+    </div>
+    <div class="category-grid">
+      <button class="category-option" onclick="pickChallengeItemType('nutrition')">
+        <div class="icon" style="background:${withOpacity(CATEGORY_ACCENT_HEX.nutrition,0.16)};">${targetGlyph()}</div>
+        <div><h3>Nutrition</h3><p>Everyone hits the same calorie, protein, fat, carb, or water target.</p></div>
+      </button>
+      <button class="category-option" onclick="pickChallengeItemType('steps')">
+        <div class="icon" style="background:${withOpacity(CATEGORY_ACCENT_HEX.steps,0.16)};">${stepsGlyph()}</div>
+        <div><h3>Steps</h3><p>A shared step target — daily, or totaled over a period.</p></div>
+      </button>
+      <button class="category-option" onclick="pickChallengeItemType('custom')">
+        <div class="icon" style="background:${withOpacity(CATEGORY_ACCENT_HEX.custom,0.16)};">${checkGlyph()}</div>
+        <div><h3>Custom</h3><p>Anything else — "workout 4x a week," your call.</p></div>
+      </button>
+      <button class="category-option" onclick="pickChallengeItemType('withhold')">
+        <div class="icon" style="background:${withOpacity(CATEGORY_ACCENT_HEX.withhold,0.12)};">${withholdGlyph()}</div>
+        <div><h3>Abstain</h3><p>Whoever stays cleanest wins — one slip costs that day's points.</p></div>
+      </button>
+    </div>
+  `;
 }
-function itemPeriodPickerHtml(includeDay){
-  const d = itemDraftBuffer;
+let challengeItemBuilder = null;
+function pickChallengeItemType(cat){
+  if(cat === 'nutrition'){
+    challengeItemBuilder = {
+      category: 'nutrition', sex: null, age: '', heightFt: '', heightIn: '', heightCm: '', weightLb: '', weightKg: '', activity: null, direction: null,
+      calculated: false,
+      macros: {
+        calories: { checked:false, value:'' }, protein: { checked:false, value:'' }, fat: { checked:false, value:'' },
+        carbs: { checked:false, value:'' }, water: { checked:false, value:'' }
+      }
+    };
+    render('challenge-new-nutrition');
+  } else if(cat === 'steps'){
+    challengeItemBuilder = { category:'steps', metricKey:'steps', label:'Steps', targetValue:'', unit:'', periodLabel:'week', customDays:7, stepsMode:'daily' };
+    render('challenge-new-steps');
+  } else if(cat === 'custom'){
+    challengeItemBuilder = { category:'custom', metricKey:'custom', label:'', targetValue:'', unit:'', periodLabel:'week', customDays:7 };
+    render('challenge-new-custom');
+  } else {
+    challengeItemBuilder = { category:'withhold', metricKey:'withhold', label:'' };
+    render('challenge-new-withhold');
+  }
+}
+function newItemPeriodPickerHtml(includeDay){
+  const d = challengeItemBuilder;
   return `
     <div class="field">
       <label>Period</label>
-      <select onchange="itemDraftBuffer.periodLabel=this.value; openModal(addChallengeItemModalHtml());">
+      <select onchange="challengeItemBuilder.periodLabel=this.value; render(currentView);">
         ${includeDay ? `<option value="day" ${d.periodLabel==='day'?'selected':''}>Daily</option>` : ''}
         <option value="week" ${d.periodLabel==='week'?'selected':''}>Weekly</option>
         <option value="month" ${d.periodLabel==='month'?'selected':''}>Monthly</option>
@@ -5168,21 +5199,25 @@ function itemPeriodPickerHtml(includeDay){
     ${d.periodLabel==='custom' ? `
       <div class="field">
         <label>Days per period</label>
-        <input type="number" value="${d.customDays}" oninput="itemDraftBuffer.customDays=this.value" placeholder="e.g. 10">
+        <input type="number" value="${d.customDays}" oninput="challengeItemBuilder.customDays=this.value" placeholder="e.g. 10">
       </div>
     ` : ''}
   `;
 }
-// Nutrition items use the SAME DRI calculator goals already use (sex,
-// age, height/weight, activity, direction -> calculateDRI()), then show
-// all 5 macros as toggleable cards, exactly like a goal's nutrition
-// results screen — a blank "daily target" number field was the wrong UI
-// for something that should be calculated, not guessed.
-function nutritionItemFieldsHtml(){
-  const d = itemDraftBuffer;
+
+// ---- nutrition item: full-screen DRI calculator + macro checklist ----
+function viewChallengeNewNutrition(){
+  const d = challengeItemBuilder;
   const canCalc = d.sex && d.age && d.activity && d.direction &&
     (nutritionUnits==='us' ? (d.heightFt && d.weightLb) : (d.heightCm && d.weightKg));
   return `
+    <div class="wizard-head">
+      <div class="back-btn" onclick="render('challenge-new-type')">${chevron()}</div>
+      <div>
+        <div class="step-title">Nutrition item</div>
+        <div class="step-sub">Uses the same calculator as a personal nutrition goal.</div>
+      </div>
+    </div>
     <div class="unit-toggle">
       <button class="${nutritionUnits==='us'?'active':''}" onclick="setChallengeNutritionUnits('us')">US (lb, ft/in)</button>
       <button class="${nutritionUnits==='metric'?'active':''}" onclick="setChallengeNutritionUnits('metric')">Metric (kg, cm)</button>
@@ -5190,52 +5225,55 @@ function nutritionItemFieldsHtml(){
     <div class="field">
       <label>Sex</label>
       <div class="pill-group">
-        <button class="pill ${d.sex==='female'?'active':''}" onclick="setItemDraftField('sex','female')">Female</button>
-        <button class="pill ${d.sex==='male'?'active':''}" onclick="setItemDraftField('sex','male')">Male</button>
+        <button class="pill ${d.sex==='female'?'active':''}" onclick="setItemBuilderField('sex','female')">Female</button>
+        <button class="pill ${d.sex==='male'?'active':''}" onclick="setItemBuilderField('sex','male')">Male</button>
       </div>
     </div>
     <div class="field">
       <label>Age</label>
-      <input type="number" placeholder="Years" value="${d.age}" oninput="itemDraftBuffer.age=this.value">
+      <input type="number" placeholder="Years" value="${d.age}" oninput="challengeItemBuilder.age=this.value">
     </div>
     ${nutritionUnits==='us' ? `
       <div class="row-2">
         <div class="field">
           <label>Height</label>
           <div style="display:flex; gap:8px;">
-            <input type="number" placeholder="ft" value="${d.heightFt}" oninput="itemDraftBuffer.heightFt=this.value">
-            <input type="number" placeholder="in" value="${d.heightIn}" oninput="itemDraftBuffer.heightIn=this.value">
+            <input type="number" placeholder="ft" value="${d.heightFt}" oninput="challengeItemBuilder.heightFt=this.value">
+            <input type="number" placeholder="in" value="${d.heightIn}" oninput="challengeItemBuilder.heightIn=this.value">
           </div>
         </div>
-        <div class="field"><label>Weight</label><input type="number" placeholder="lb" value="${d.weightLb}" oninput="itemDraftBuffer.weightLb=this.value"></div>
+        <div class="field"><label>Weight</label><input type="number" placeholder="lb" value="${d.weightLb}" oninput="challengeItemBuilder.weightLb=this.value"></div>
       </div>
     ` : `
       <div class="row-2">
-        <div class="field"><label>Height</label><input type="number" placeholder="cm" value="${d.heightCm}" oninput="itemDraftBuffer.heightCm=this.value"></div>
-        <div class="field"><label>Weight</label><input type="number" placeholder="kg" value="${d.weightKg}" oninput="itemDraftBuffer.weightKg=this.value"></div>
+        <div class="field"><label>Height</label><input type="number" placeholder="cm" value="${d.heightCm}" oninput="challengeItemBuilder.heightCm=this.value"></div>
+        <div class="field"><label>Weight</label><input type="number" placeholder="kg" value="${d.weightKg}" oninput="challengeItemBuilder.weightKg=this.value"></div>
       </div>
     `}
     <div class="field">
       <label>Activity level</label>
       <div class="pill-group">
-        ${['inactive','low_active','active','very_active'].map(lvl => `<button class="pill ${d.activity===lvl?'active':''}" onclick="setItemDraftField('activity','${lvl}')">${activityLabel(lvl)}</button>`).join('')}
+        ${['inactive','low_active','active','very_active'].map(lvl => `<button class="pill ${d.activity===lvl?'active':''}" onclick="setItemBuilderField('activity','${lvl}')">${activityLabel(lvl)}</button>`).join('')}
       </div>
     </div>
     <div class="field">
       <label>Target direction</label>
       <div class="pill-group">
-        <button class="pill ${d.direction==='lose'?'active':''}" onclick="setItemDraftField('direction','lose')">Lose weight</button>
-        <button class="pill ${d.direction==='maintain'?'active':''}" onclick="setItemDraftField('direction','maintain')">Maintain</button>
-        <button class="pill ${d.direction==='gain'?'active':''}" onclick="setItemDraftField('direction','gain')">Gain weight</button>
+        <button class="pill ${d.direction==='lose'?'active':''}" onclick="setItemBuilderField('direction','lose')">Lose weight</button>
+        <button class="pill ${d.direction==='maintain'?'active':''}" onclick="setItemBuilderField('direction','maintain')">Maintain</button>
+        <button class="pill ${d.direction==='gain'?'active':''}" onclick="setItemBuilderField('direction','gain')">Gain weight</button>
       </div>
     </div>
-    <div class="hint" style="margin-bottom:10px;">This calculates a starting point, used as the shared target for everyone in the challenge — every number below is still editable before you add it.</div>
+    <div class="hint" style="margin-bottom:10px;">This calculates a starting point, used as the shared target for everyone — every number below is still editable.</div>
     <button class="btn btn-ghost btn-block" style="margin-bottom:14px;" onclick="calculateChallengeNutrition()" ${canCalc ? '' : 'disabled'}>Calculate suggested targets</button>
     ${d.calculated ? nutritionMacroChecklistHtml() : ''}
+    <div class="btn-row">
+      <button class="btn btn-primary btn-block" onclick="confirmNutritionItems()">Add checked macros →</button>
+    </div>
   `;
 }
 function nutritionMacroChecklistHtml(){
-  const d = itemDraftBuffer;
+  const d = challengeItemBuilder;
   const alreadyAdded = new Set(challengeDraft.items.filter(it => it.category === 'nutrition').map(it => it.metricKey));
   const remaining = ['calories','protein','fat','carbs','water'].filter(k => !alreadyAdded.has(k));
   if(remaining.length === 0) return `<div class="stat-ab-empty">All 5 macros are already in this challenge.</div>`;
@@ -5248,12 +5286,12 @@ function nutritionMacroChecklistHtml(){
           <div>
             <div class="metric-name">${style.emoji} ${METRIC_FIXED_LABEL[key]}</div>
             <div class="metric-value-row">
-              <input type="number" value="${m.value}" ${m.checked?'':'disabled'} style="color:${style.color};" oninput="itemDraftBuffer.macros['${key}'].value=this.value">
+              <input type="number" value="${m.value}" ${m.checked?'':'disabled'} style="color:${style.color};" oninput="challengeItemBuilder.macros['${key}'].value=this.value">
               <span class="metric-unit">${NUTRITION_METRIC_UNIT[key]} / day</span>
             </div>
           </div>
           <label class="switch">
-            <input type="checkbox" ${m.checked?'checked':''} onchange="toggleItemMacro('${key}')">
+            <input type="checkbox" ${m.checked?'checked':''} onchange="toggleItemBuilderMacro('${key}')">
             <span class="track"></span>
           </label>
         </div>
@@ -5261,11 +5299,11 @@ function nutritionMacroChecklistHtml(){
     `;
   }).join('');
 }
-function setChallengeNutritionUnits(u){ nutritionUnits = u; openModal(addChallengeItemModalHtml()); }
-function setItemDraftField(key, val){ itemDraftBuffer[key] = val; openModal(addChallengeItemModalHtml()); }
+function setChallengeNutritionUnits(u){ nutritionUnits = u; render('challenge-new-nutrition'); }
+function setItemBuilderField(key, val){ challengeItemBuilder[key] = val; render('challenge-new-nutrition'); }
 function calculateChallengeNutrition(){
-  const r = calculateDRI(itemDraftBuffer);
-  const d = itemDraftBuffer;
+  const r = calculateDRI(challengeItemBuilder);
+  const d = challengeItemBuilder;
   d.macros.calories.value = r.calories;
   d.macros.protein.value = r.proteinG;
   d.macros.fat.value = r.fatG;
@@ -5273,128 +5311,185 @@ function calculateChallengeNutrition(){
   d.macros.water.value = r.waterOz;
   ['calories','protein','fat','carbs','water'].forEach(k => { d.macros[k].checked = true; });
   d.calculated = true;
-  openModal(addChallengeItemModalHtml());
+  render('challenge-new-nutrition');
 }
-function toggleItemMacro(key){ itemDraftBuffer.macros[key].checked = !itemDraftBuffer.macros[key].checked; openModal(addChallengeItemModalHtml()); }
-function addChallengeItemModalHtml(){
-  const d = itemDraftBuffer;
-  let fields = '';
-  if(d.category === 'nutrition'){
-    fields = nutritionItemFieldsHtml();
-  } else if(d.category === 'steps'){
-    fields = `
-      <div class="field">
-        <label>Step target</label>
-        <input type="number" value="${d.targetValue}" oninput="itemDraftBuffer.targetValue=this.value" placeholder="e.g. 8000">
-      </div>
-      <div class="field">
-        <label>Counted how?</label>
-        <select onchange="itemDraftBuffer.stepsMode=this.value; openModal(addChallengeItemModalHtml());">
-          <option value="daily" ${d.stepsMode==='daily'?'selected':''}>Every single day</option>
-          <option value="cumulative" ${d.stepsMode==='cumulative'?'selected':''}>Total over a period</option>
-        </select>
-      </div>
-      ${d.stepsMode==='cumulative' ? itemPeriodPickerHtml(false) : ''}
-    `;
-  } else if(d.category === 'custom'){
-    fields = `
-      <div class="field">
-        <label>Item name</label>
-        <input type="text" value="${d.label}" oninput="itemDraftBuffer.label=this.value" placeholder="e.g. Workout">
-      </div>
-      <div class="field">
-        <label>Target count per period</label>
-        <input type="number" value="${d.targetValue}" oninput="itemDraftBuffer.targetValue=this.value" placeholder="e.g. 4">
-      </div>
-      ${itemPeriodPickerHtml(true)}
-    `;
-  } else {
-    fields = `
-      <div class="field">
-        <label>Item name</label>
-        <input type="text" value="${d.label}" oninput="itemDraftBuffer.label=this.value" placeholder="e.g. No smoking">
-      </div>
-      <div class="tip-card" style="align-items:flex-start;"><span class="tip-text">🚫 No numeric target — a clean day (no slip logged) earns full points, a slipped day earns none.</span></div>
-    `;
+function toggleItemBuilderMacro(key){ challengeItemBuilder.macros[key].checked = !challengeItemBuilder.macros[key].checked; render('challenge-new-nutrition'); }
+function confirmNutritionItems(){
+  const d = challengeItemBuilder;
+  if(!d.calculated){ showToast('Calculate targets first'); return; }
+  const checked = ['calories','protein','fat','carbs','water'].filter(k => d.macros[k].checked);
+  if(checked.length === 0){ showToast('Check at least one macro to include'); return; }
+  for(const key of checked){
+    if(!d.macros[key].value || parseFloat(d.macros[key].value) <= 0){ showToast(`Set a valid target for ${METRIC_FIXED_LABEL[key]}`); return; }
   }
+  checked.forEach(key => {
+    challengeDraft.items.push({
+      category: 'nutrition', metricKey: key, label: METRIC_FIXED_LABEL[key],
+      targetValue: d.macros[key].value, unit: NUTRITION_METRIC_UNIT[key],
+      periodLabel: 'day', customDays: null, stepsMode: null,
+      ptsFull: 10, ptsNinety: 7, ptsSeventy: 3, ptsBelow: 0
+    });
+  });
+  challengeItemBuilder = null;
+  openAddAnotherModal();
+}
+
+// ---- steps item ----
+function viewChallengeNewSteps(){
+  const d = challengeItemBuilder;
   return `
-    <div class="modal-title">Add an item</div>
+    <div class="wizard-head">
+      <div class="back-btn" onclick="render('challenge-new-type')">${chevron()}</div>
+      <div>
+        <div class="step-title">Steps item</div>
+        <div class="step-sub">A shared step target for everyone.</div>
+      </div>
+    </div>
     <div class="field">
-      <label>Type</label>
-      <select onchange="switchItemDraftCategory(this.value)">
-        <option value="nutrition" ${d.category==='nutrition'?'selected':''}>Nutrition</option>
-        <option value="steps" ${d.category==='steps'?'selected':''}>Steps</option>
-        <option value="custom" ${d.category==='custom'?'selected':''}>Custom</option>
-        <option value="withhold" ${d.category==='withhold'?'selected':''}>Abstain</option>
+      <label>Step target</label>
+      <input type="number" value="${d.targetValue}" oninput="challengeItemBuilder.targetValue=this.value" placeholder="e.g. 8000">
+    </div>
+    <div class="field">
+      <label>Counted how?</label>
+      <select onchange="challengeItemBuilder.stepsMode=this.value; render('challenge-new-steps');">
+        <option value="daily" ${d.stepsMode==='daily'?'selected':''}>Every single day</option>
+        <option value="cumulative" ${d.stepsMode==='cumulative'?'selected':''}>Total over a period</option>
       </select>
     </div>
-    ${fields}
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="confirmAddChallengeItem()">${d.category==='nutrition' ? 'Add checked macros' : 'Add item'}</button>
+    ${d.stepsMode==='cumulative' ? newItemPeriodPickerHtml(false) : ''}
+    <div class="btn-row">
+      <button class="btn btn-primary btn-block" onclick="confirmSimpleItem()">Add item →</button>
     </div>
   `;
 }
-function switchItemDraftCategory(cat){
-  if(cat === 'nutrition'){
-    itemDraftBuffer = {
-      category: 'nutrition',
-      sex: null, age: '', heightFt: '', heightIn: '', heightCm: '', weightLb: '', weightKg: '', activity: null, direction: null,
-      calculated: false,
-      macros: {
-        calories: { checked:false, value:'' },
-        protein: { checked:false, value:'' },
-        fat: { checked:false, value:'' },
-        carbs: { checked:false, value:'' },
-        water: { checked:false, value:'' }
-      }
-    };
-  } else {
-    itemDraftBuffer = {
-      category: cat,
-      metricKey: cat,
-      label: cat === 'steps' ? 'Steps' : '',
-      targetValue: '',
-      unit: '',
-      periodLabel: 'week', customDays: 7, stepsMode: 'daily'
-    };
-  }
-  openModal(addChallengeItemModalHtml());
+// ---- custom item ----
+function viewChallengeNewCustom(){
+  const d = challengeItemBuilder;
+  return `
+    <div class="wizard-head">
+      <div class="back-btn" onclick="render('challenge-new-type')">${chevron()}</div>
+      <div>
+        <div class="step-title">Custom item</div>
+        <div class="step-sub">Anything else — your call.</div>
+      </div>
+    </div>
+    <div class="field">
+      <label>Item name</label>
+      <input type="text" value="${d.label}" oninput="challengeItemBuilder.label=this.value" placeholder="e.g. Workout">
+    </div>
+    <div class="field">
+      <label>Target count per period</label>
+      <input type="number" value="${d.targetValue}" oninput="challengeItemBuilder.targetValue=this.value" placeholder="e.g. 4">
+    </div>
+    ${newItemPeriodPickerHtml(true)}
+    <div class="btn-row">
+      <button class="btn btn-primary btn-block" onclick="confirmSimpleItem()">Add item →</button>
+    </div>
+  `;
 }
-function confirmAddChallengeItem(){
-  const d = itemDraftBuffer;
-  if(d.category === 'nutrition'){
-    if(!d.calculated){ showToast('Calculate targets first'); return; }
-    const checked = ['calories','protein','fat','carbs','water'].filter(k => d.macros[k].checked);
-    if(checked.length === 0){ showToast('Check at least one macro to include'); return; }
-    for(const key of checked){
-      if(!d.macros[key].value || parseFloat(d.macros[key].value) <= 0){ showToast(`Set a valid target for ${METRIC_FIXED_LABEL[key]}`); return; }
-    }
-    checked.forEach(key => {
-      challengeDraft.items.push({
-        category: 'nutrition', metricKey: key, label: METRIC_FIXED_LABEL[key],
-        targetValue: d.macros[key].value, unit: NUTRITION_METRIC_UNIT[key],
-        periodLabel: 'day', customDays: null, stepsMode: null
-      });
-    });
-    itemDraftBuffer = null;
-    closeModal();
-    render('challenge-new');
-    return;
-  }
+// ---- withhold item ----
+function viewChallengeNewWithhold(){
+  const d = challengeItemBuilder;
+  return `
+    <div class="wizard-head">
+      <div class="back-btn" onclick="render('challenge-new-type')">${chevron()}</div>
+      <div>
+        <div class="step-title">Abstain item</div>
+        <div class="step-sub">No numeric target — a clean day wins.</div>
+      </div>
+    </div>
+    <div class="field">
+      <label>Item name</label>
+      <input type="text" value="${d.label}" oninput="challengeItemBuilder.label=this.value" placeholder="e.g. No smoking">
+    </div>
+    <div class="tip-card" style="align-items:flex-start;"><span class="tip-text">🚫 A clean day (no slip logged) earns full points, a slipped day earns none.</span></div>
+    <div class="btn-row">
+      <button class="btn btn-primary btn-block" onclick="confirmSimpleItem()">Add item →</button>
+    </div>
+  `;
+}
+function confirmSimpleItem(){
+  const d = challengeItemBuilder;
   if((d.category === 'custom' || d.category === 'withhold') && !d.label.trim()){ showToast('Give this item a name'); return; }
   if(d.category !== 'withhold' && (!d.targetValue || parseFloat(d.targetValue) <= 0)){ showToast('Set a target for this item'); return; }
-  challengeDraft.items.push(Object.assign({}, d));
-  itemDraftBuffer = null;
-  closeModal();
-  render('challenge-new');
+  challengeDraft.items.push(Object.assign({ ptsFull:10, ptsNinety:7, ptsSeventy:3, ptsBelow:0 }, d));
+  challengeItemBuilder = null;
+  openAddAnotherModal();
 }
 
+// ---- "add another?" junction (a modal, not a screen — matches how it was described) ----
+function openAddAnotherModal(){
+  openModal(`
+    <div class="modal-title">Want to add another area?</div>
+    <div class="modal-desc">You can mix nutrition, steps, custom, and abstain items in one challenge.</div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal(); render('challenge-new-points');">No, I'm done</button>
+      <button class="btn btn-primary" onclick="closeModal(); render('challenge-new-type');">Yes, add another</button>
+    </div>
+  `);
+}
+
+// ---- points step: per-item, editable, defaults to the standard scale ----
+function viewChallengeNewPoints(){
+  const cd = challengeDraft;
+  if(cd.items.length === 0){ render('challenge-new-type'); return ''; }
+  return `
+    <div class="wizard-head">
+      <div class="back-btn" onclick="openAddAnotherModal()">${chevron()}</div>
+      <div>
+        <div class="step-title">Set the points</div>
+        <div class="step-sub">Defaults: 10 for hitting it, 7 for 90%+, 3 for 70%+, 0 below. Edit any of these per item.</div>
+      </div>
+    </div>
+    ${cd.items.map((it,i) => challengePointsEditRowHtml(it,i)).join('')}
+    <div class="btn-row">
+      <button class="btn btn-primary btn-block" onclick="render('challenge-new-invite')">Next →</button>
+    </div>
+  `;
+}
+function challengePointsEditRowHtml(it, i){
+  const style = it.category === 'nutrition' ? metricStyle(it.metricKey) : { emoji: itemEmoji(it), color: CATEGORY_ACCENT_HEX[it.category] || 'var(--navy)' };
+  if(it.category === 'withhold'){
+    return `
+      <div class="points-edit-card" style="border-left:3px solid ${style.color};">
+        <div class="points-edit-title">${style.emoji} ${it.label}</div>
+        <div class="points-edit-row"><label>Clean day</label><input type="number" value="${it.ptsFull}" oninput="challengeDraft.items[${i}].ptsFull=this.value"></div>
+        <div class="points-edit-row"><label>Slip</label><input type="number" value="${it.ptsBelow}" oninput="challengeDraft.items[${i}].ptsBelow=this.value"></div>
+      </div>
+    `;
+  }
+  return `
+    <div class="points-edit-card" style="border-left:3px solid ${style.color};">
+      <div class="points-edit-title">${style.emoji} ${it.label}</div>
+      <div class="points-edit-row"><label>Hit it (100%)</label><input type="number" value="${it.ptsFull}" oninput="challengeDraft.items[${i}].ptsFull=this.value"></div>
+      <div class="points-edit-row"><label>90%+</label><input type="number" value="${it.ptsNinety}" oninput="challengeDraft.items[${i}].ptsNinety=this.value"></div>
+      <div class="points-edit-row"><label>70%+</label><input type="number" value="${it.ptsSeventy}" oninput="challengeDraft.items[${i}].ptsSeventy=this.value"></div>
+      <div class="points-edit-row"><label>Below 70%</label><input type="number" value="${it.ptsBelow}" oninput="challengeDraft.items[${i}].ptsBelow=this.value"></div>
+    </div>
+  `;
+}
+
+// ---- invite step ----
+function viewChallengeNewInvite(){
+  return `
+    <div class="wizard-head">
+      <div class="back-btn" onclick="render('challenge-new-points')">${chevron()}</div>
+      <div>
+        <div class="step-title">Who do you want to invite?</div>
+        <div class="step-sub">Optional — you can invite more people after creating it too.</div>
+      </div>
+    </div>
+    ${challengeInvitePanelHtml()}
+    <div class="btn-row">
+      <button class="btn btn-primary btn-block" onclick="saveChallengeAndFinish()">Create challenge 🏆</button>
+    </div>
+  `;
+}
 function challengeInvitePanelHtml(){
   const invites = challengeDraft.invites || [];
   return `
     <div class="field">
-      <label>Invite people (optional — you can invite more later too)</label>
+      <label>Invite people</label>
       <div class="ab-panel" style="border:1.5px solid var(--line); border-radius:12px; padding:14px;">
         <div class="invite-chip-list">
           ${invites.map((inv,j)=>`<span class="ab-chip">${inv.firstName}${inv.lastName?' '+inv.lastName:''} <button onclick="removeChallengeInvite(${j})">✕</button></span>`).join('')}
@@ -5430,9 +5525,9 @@ function addChallengeInvite(){
   if(!val) return;
   challengeDraft.invites = challengeDraft.invites || [];
   challengeDraft.invites.push({ firstName, lastName, type, value: val });
-  render('challenge-new');
+  render('challenge-new-invite');
 }
-function removeChallengeInvite(j){ challengeDraft.invites.splice(j,1); render('challenge-new'); }
+function removeChallengeInvite(j){ challengeDraft.invites.splice(j,1); render('challenge-new-invite'); }
 
 async function saveChallengeAndFinish(){
   const cd = challengeDraft;
@@ -5458,7 +5553,11 @@ async function saveChallengeAndFinish(){
     unit: it.unit || null,
     period_type: (it.category === 'nutrition' || it.category === 'withhold' || (it.category==='steps' && it.stepsMode==='daily')) ? 'daily' : clientPeriodToDb(it.periodLabel || 'week'),
     custom_period_days: it.periodLabel === 'custom' ? (parseInt(it.customDays) || null) : null,
-    steps_mode: it.category === 'steps' ? (it.stepsMode || 'daily') : null
+    steps_mode: it.category === 'steps' ? (it.stepsMode || 'daily') : null,
+    pts_full: parseFloat(it.ptsFull) || 0,
+    pts_ninety: parseFloat(it.ptsNinety) || 0,
+    pts_seventy: parseFloat(it.ptsSeventy) || 0,
+    pts_below: parseFloat(it.ptsBelow) || 0
   }));
   const { error: iErr } = await sbClient.from('challenge_items').insert(itemRows);
   if(iErr){ showToast("Couldn't save items — " + iErr.message); return; }
@@ -5482,6 +5581,7 @@ async function saveChallengeAndFinish(){
 // ---- detail view: per-item logging + combined leaderboard + invite-more ----
 let moreInvitesDraft = [];
 function openChallengeDetail(id){ currentChallengeId = id; moreInvitesDraft = []; render('challenge-detail'); }
+let editingChallengeItemId = null;
 function viewChallengeDetail(){
   const ch = myChallenges.find(c => c.id === currentChallengeId);
   if(!ch) return `<div class="empty-state" style="text-align:center;"><p>Challenge not found.</p><button class="btn btn-ghost" onclick="render('challenges')">Back to Challenges</button></div>`;
@@ -5503,14 +5603,7 @@ function viewChallengeDetail(){
       <span>${status.phase==='upcoming' ? `Starts in <strong>${status.days}d</strong>` : status.phase==='ended' ? '<strong>Ended</strong>' : `<strong>${status.days}d</strong> left`}</span>
       <span>${ch.startDate} → ${ch.endDate}</span>
     </div>
-    <div class="points-key">🏆 Each item scores 10 for hitting it, 7 for 90%+, 3 for 70%+, 0 below (10/0 clean-vs-slip for abstain items). Your total is the sum across every item, scored live as you log.</div>
-    ${status.phase !== 'ended' ? `
-      <div class="stat-section-title" style="margin-top:0;">Log today</div>
-      ${ch.items.map(it => challengeItemLogBoxHtml(ch, it)).join('')}
-    ` : ''}
-    <div class="stat-section-title">Items</div>
-    ${ch.items.map(it => `<div class="stat-ab-metric-title">${itemEmoji(it)} ${challengeItemTargetLabel(it)}</div>`).join('')}
-    <div class="stat-section-title">Leaderboard</div>
+    <div class="stat-section-title" style="margin-top:0;">Leaderboard</div>
     ${board.map((p,i) => `
       <div class="leaderboard-row ${p.userId===currentUser.id ? 'is-me' : ''}">
         <div class="leaderboard-rank ${i<3?'medal':''}">${i<3 ? medals[i] : (i+1)}</div>
@@ -5521,6 +5614,12 @@ function viewChallengeDetail(){
         </div>
       </div>
     `).join('')}
+    ${status.phase !== 'ended' ? `
+      <div class="stat-section-title">Log today</div>
+      ${ch.items.map(it => challengeItemLogBoxHtml(ch, it)).join('')}
+    ` : ''}
+    <div class="stat-section-title">Items${isCreator ? ' (tap to edit)' : ''}</div>
+    ${ch.items.map(it => challengeItemRowHtml(ch, it, isCreator)).join('')}
     ${pendingInvites.length ? `
       <div class="stat-section-title">Invited, not joined yet</div>
       ${pendingInvites.map(i => `
@@ -5530,12 +5629,195 @@ function viewChallengeDetail(){
         </div>
       `).join('')}
     ` : ''}
-    ${isCreator ? `
-      <div class="stat-section-title">Invite more people</div>
-      ${moreInvitesPanelHtml()}
-      <button class="btn btn-ghost btn-block" onclick="sendMoreChallengeInvites()">Send invites</button>
-    ` : ''}
+    ${isCreator ? challengeManageSectionHtml(ch) : `
+      <div class="stat-section-title">Leave</div>
+      <button class="btn btn-ghost btn-block" onclick="confirmLeaveChallenge()">Leave this challenge</button>
+    `}
   `;
+}
+// ---- item display / inline edit (creator only) ----
+function challengeItemRowHtml(ch, item, isCreator){
+  if(isCreator && editingChallengeItemId === item.id){
+    return challengeItemEditFormHtml(item);
+  }
+  return `
+    <div class="ab-person-row" ${isCreator ? `style="cursor:pointer;" onclick="toggleEditChallengeItem(${jsAttr(item.id)})"` : ''}>
+      <span>${itemEmoji(item)} ${challengeItemTargetLabel(item)}</span>
+      ${isCreator ? '<span class="btn-text" style="font-size:12px;">Edit</span>' : ''}
+    </div>
+  `;
+}
+function toggleEditChallengeItem(itemId){
+  editingChallengeItemId = editingChallengeItemId === itemId ? null : itemId;
+  render('challenge-detail');
+}
+function challengeItemEditFormHtml(item){
+  const targetField = item.category === 'withhold' ? '' : `
+    <div class="field">
+      <label>Target${item.unit ? ' ('+item.unit+')' : ''}</label>
+      <input type="number" id="edit-item-target" value="${item.targetValue}">
+    </div>
+  `;
+  const pointsFields = item.category === 'withhold' ? `
+    <div class="points-edit-row"><label>Clean day</label><input type="number" id="edit-item-full" value="${item.ptsFull}"></div>
+    <div class="points-edit-row"><label>Slip</label><input type="number" id="edit-item-below" value="${item.ptsBelow}"></div>
+  ` : `
+    <div class="points-edit-row"><label>Hit it (100%)</label><input type="number" id="edit-item-full" value="${item.ptsFull}"></div>
+    <div class="points-edit-row"><label>90%+</label><input type="number" id="edit-item-ninety" value="${item.ptsNinety}"></div>
+    <div class="points-edit-row"><label>70%+</label><input type="number" id="edit-item-seventy" value="${item.ptsSeventy}"></div>
+    <div class="points-edit-row"><label>Below 70%</label><input type="number" id="edit-item-below" value="${item.ptsBelow}"></div>
+  `;
+  return `
+    <div class="points-edit-card" style="border:1.5px solid var(--line);">
+      <div class="points-edit-title">${itemEmoji(item)} ${item.label}</div>
+      ${targetField}
+      ${pointsFields}
+      <div class="hint" style="margin:8px 0;">Changing the target or points rescores every day already logged, not just going forward.</div>
+      <div class="btn-row">
+        <button class="btn btn-ghost" style="flex:1;" onclick="editingChallengeItemId=null; render('challenge-detail');">Cancel</button>
+        <button class="btn btn-ghost" style="flex:1; color:var(--danger);" onclick="confirmRemoveChallengeItem(${jsAttr(item.id)}, ${jsAttr(item.label)})">Remove item</button>
+        <button class="btn btn-primary" style="flex:1;" onclick="saveChallengeItemEdit(${jsAttr(item.id)})">Save</button>
+      </div>
+    </div>
+  `;
+}
+async function saveChallengeItemEdit(itemId){
+  const ch = myChallenges.find(c => c.id === currentChallengeId);
+  const item = ch.items.find(it => it.id === itemId);
+  const update = {
+    pts_full: parseFloat(document.getElementById('edit-item-full').value) || 0,
+    pts_below: parseFloat(document.getElementById('edit-item-below').value) || 0
+  };
+  if(item.category !== 'withhold'){
+    const targetInput = document.getElementById('edit-item-target');
+    const target = parseFloat(targetInput.value);
+    if(!target || target <= 0){ showToast('Set a valid target'); return; }
+    update.target_value = target;
+    update.pts_ninety = parseFloat(document.getElementById('edit-item-ninety').value) || 0;
+    update.pts_seventy = parseFloat(document.getElementById('edit-item-seventy').value) || 0;
+  }
+  const { error } = await sbClient.from('challenge_items').update(update).eq('id', itemId);
+  if(error){ showToast("Couldn't save — " + error.message); return; }
+  editingChallengeItemId = null;
+  await loadChallenges();
+  showToast('Saved');
+  render('challenge-detail');
+}
+function confirmRemoveChallengeItem(itemId, label){
+  confirmModal(
+    `Remove ${label}?`,
+    "This removes it from the challenge along with everyone's logged progress on it. The rest of the challenge is unaffected.",
+    () => doRemoveChallengeItem(itemId)
+  );
+}
+async function doRemoveChallengeItem(itemId){
+  const { error } = await sbClient.from('challenge_items').delete().eq('id', itemId);
+  if(error){ showToast("Couldn't remove — " + error.message); return; }
+  editingChallengeItemId = null;
+  await loadChallenges();
+  showToast('Removed');
+  render('challenge-detail');
+}
+// ---- creator management section ----
+function challengeManageSectionHtml(ch){
+  return `
+    <div class="stat-section-title">Manage challenge</div>
+    <div class="field">
+      <label>Name</label>
+      <input type="text" id="edit-ch-title" value="${ch.title}">
+    </div>
+    <div class="row-2">
+      <div class="field"><label>Start date</label><input type="date" id="edit-ch-start" value="${ch.startDate}"></div>
+      <div class="field"><label>End date</label><input type="date" id="edit-ch-end" value="${ch.endDate}"></div>
+    </div>
+    <button class="btn btn-ghost btn-block" style="margin-bottom:18px;" onclick="saveChallengeMeta()">Save name/dates</button>
+
+    <div class="stat-section-title">Participants</div>
+    ${ch.participants.map(p => `
+      <div class="ab-person-row">
+        <span>${p.displayName}${p.userId===ch.creatorUserId ? ' (creator)' : ''}</span>
+        ${p.userId!==ch.creatorUserId ? `<button class="btn-text" style="font-size:12px; color:var(--danger); padding:0;" onclick="confirmRemoveChallengeParticipant(${jsAttr(p.userId)}, ${jsAttr(p.displayName)})">Remove</button>` : ''}
+      </div>
+    `).join('')}
+
+    <div class="stat-section-title">Invite more people</div>
+    ${moreInvitesPanelHtml()}
+    <button class="btn btn-ghost btn-block" style="margin-bottom:18px;" onclick="sendMoreChallengeInvites()">Send invites</button>
+
+    <div class="stat-section-title">Danger zone</div>
+    <div class="btn-row">
+      <button class="btn btn-ghost" style="flex:1;" onclick="confirmEndChallengeEarly()">End early</button>
+      <button class="btn btn-ghost" style="flex:1; color:var(--danger);" onclick="confirmDeleteChallenge()">Delete</button>
+    </div>
+  `;
+}
+async function saveChallengeMeta(){
+  const title = document.getElementById('edit-ch-title').value.trim();
+  const startDate = document.getElementById('edit-ch-start').value;
+  const endDate = document.getElementById('edit-ch-end').value;
+  if(!title){ showToast('Give it a name'); return; }
+  if(!startDate || !endDate || endDate < startDate){ showToast('Check the dates'); return; }
+  const { error } = await sbClient.from('challenges').update({ title, start_date: startDate, end_date: endDate }).eq('id', currentChallengeId);
+  if(error){ showToast("Couldn't save — " + error.message); return; }
+  await loadChallenges();
+  showToast('Saved');
+  render('challenge-detail');
+}
+function confirmRemoveChallengeParticipant(userId, name){
+  confirmModal(
+    `Remove ${name}?`,
+    "They'll lose access to this challenge. Their logged progress stays on the leaderboard history but they won't appear as an active player.",
+    () => doRemoveChallengeParticipant(userId)
+  );
+}
+async function doRemoveChallengeParticipant(userId){
+  const { error } = await sbClient.from('challenge_participants').update({ active: false }).eq('challenge_id', currentChallengeId).eq('user_id', userId);
+  if(error){ showToast("Couldn't remove — " + error.message); return; }
+  await loadChallenges();
+  showToast('Removed');
+  render('challenge-detail');
+}
+function confirmLeaveChallenge(){
+  confirmModal(
+    'Leave this challenge?',
+    "You'll drop off the leaderboard and stop being able to log progress. You can only rejoin if the creator invites you again.",
+    doLeaveChallenge
+  );
+}
+async function doLeaveChallenge(){
+  const { error } = await sbClient.from('challenge_participants').update({ active: false }).eq('challenge_id', currentChallengeId).eq('user_id', currentUser.id);
+  if(error){ showToast("Couldn't leave — " + error.message); return; }
+  await loadChallenges();
+  showToast('Left the challenge');
+  render('challenges');
+}
+function confirmEndChallengeEarly(){
+  confirmModal(
+    'End this challenge early?',
+    "Sets the end date to today. The leaderboard freezes where it stands — no more logging after that.",
+    doEndChallengeEarly
+  );
+}
+async function doEndChallengeEarly(){
+  const { error } = await sbClient.from('challenges').update({ end_date: todayKey() }).eq('id', currentChallengeId);
+  if(error){ showToast("Couldn't end it — " + error.message); return; }
+  await loadChallenges();
+  showToast('Challenge ended');
+  render('challenge-detail');
+}
+function confirmDeleteChallenge(){
+  confirmModal(
+    'Delete this challenge?',
+    "This permanently deletes it — the leaderboard, everyone's logged progress, all of it. This can't be undone.",
+    doDeleteChallenge
+  );
+}
+async function doDeleteChallenge(){
+  const { error } = await sbClient.from('challenges').delete().eq('id', currentChallengeId);
+  if(error){ showToast("Couldn't delete — " + error.message); return; }
+  await loadChallenges();
+  showToast('Challenge deleted');
+  render('challenges');
 }
 function challengeItemLogBoxHtml(ch, item){
   const myLogs = challengeItemUserLogs(ch, item, currentUser.id);
