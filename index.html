@@ -735,6 +735,50 @@
   .leaderboard-name .you-tag{ font-size:11.5px; font-weight:600; color: var(--green-deep); margin-left:4px; }
   .leaderboard-points{ font-family:'Poppins',sans-serif; font-weight:800; font-size: 17px; color: var(--navy); flex-shrink:0; }
   .leaderboard-points-label{ font-size: 10.5px; font-weight:600; color: var(--muted); display:block; text-align:right; }
+
+  /* Leaderboard v2 — its own card, avatar initials, a bar scaled against
+     the leader so the gap is visible at a glance. */
+  .leaderboard-card{
+    background: var(--card); border-radius: 16px; padding: 14px 16px 6px;
+    box-shadow: var(--shadow); margin-bottom: 4px;
+  }
+  .leaderboard-card-title{
+    font-family:'Poppins',sans-serif; font-weight:800; font-size: 15px; color: var(--navy); margin-bottom: 8px;
+  }
+  .lb-row{
+    display:flex; align-items:center; gap: 10px;
+    padding: 10px 4px; border-bottom: 1px solid var(--line);
+  }
+  .lb-row:last-child{ border-bottom:none; }
+  .lb-row.is-me{ background: var(--paper); border-radius: 10px; padding-left: 8px; padding-right: 8px; }
+  .lb-rank{ width: 22px; text-align:center; font-family:'Poppins',sans-serif; font-weight:800; font-size: 14px; color: var(--muted); flex-shrink:0; }
+  .lb-rank.medal{ font-size: 19px; }
+  .lb-avatar{
+    width: 34px; height: 34px; border-radius: 50%; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    color: #fff; font-family:'Poppins',sans-serif; font-weight:800; font-size: 14px;
+  }
+  .lb-main{ flex:1; min-width:0; }
+  .lb-name{ font-size: 13.5px; font-weight:700; color: var(--ink); margin-bottom: 4px; }
+  .lb-name .you-tag{ font-size:11px; font-weight:600; color: var(--green-deep); margin-left:4px; }
+  .lb-bar-track{ height: 6px; border-radius: 4px; background: var(--paper); overflow:hidden; }
+  .lb-bar-fill{ height: 100%; border-radius: 4px; transition: width .3s ease; }
+  .lb-points-wrap{ flex-shrink:0; text-align:right; }
+  .lb-points{ font-family:'Poppins',sans-serif; font-weight:800; font-size: 16px; color: var(--navy); }
+  .lb-points-label{ font-size: 10px; font-weight:600; color: var(--muted); }
+
+  /* A visible break between "look at standings" and "log your own stuff" */
+  .section-divider{
+    height: 1px; background: linear-gradient(to right, transparent, var(--line) 15%, var(--line) 85%, transparent);
+    margin: 22px 0 18px;
+  }
+  .log-section-card{
+    background: var(--paper); border-radius: 16px; padding: 14px 16px; margin-bottom: 18px;
+  }
+  .log-section-title{
+    font-family:'Poppins',sans-serif; font-weight:800; font-size: 14px; color: var(--navy); margin-bottom: 10px;
+  }
+  .log-section-card .log-today-box{ background: var(--card); }
   .challenge-meta-row{
     display:flex; justify-content:space-between; align-items:center;
     background: var(--paper); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px;
@@ -2577,6 +2621,7 @@ function render(view, payload){
   else if(view === 'challenge-new-points') app.innerHTML = viewChallengeNewPoints();
   else if(view === 'challenge-new-invite') app.innerHTML = viewChallengeNewInvite();
   else if(view === 'challenge-detail') app.innerHTML = viewChallengeDetail();
+  else if(view === 'challenge-manage') app.innerHTML = viewChallengeManage();
   renderNav();
   animateCountUps();
   if(view !== lastRenderedView) window.scrollTo(0,0);
@@ -4249,6 +4294,7 @@ function viewProfile(){
     ${profileStatsSectionHtml(ng)}
     ${ng ? profileDailyGoalsSectionHtml(ng) : ''}
     ${profileFuelfamSectionHtml()}
+    ${profileChallengesSectionHtml()}
     ${profileAbSectionHtml()}
     ${profileWeightHistorySectionHtml(ng)}
 
@@ -4872,6 +4918,70 @@ function resetMetricValue(goalId, key){
   render('profile');
 }
 
+// Challenges you created — invite status inline (same pattern as the AB
+// section above), full editing one tap away via "Manage". Deliberately
+// doesn't show challenges you only joined; those have no owner controls.
+function profileChallengesSectionHtml(){
+  const created = myChallenges.filter(ch => ch.creatorUserId === currentUser.id);
+  return `
+    <div class="profile-section">
+      <h2>Challenges</h2>
+      ${created.length === 0 ? `
+        <p class="empty-inline">You haven't created any challenges yet.</p>
+      ` : created.map(ch => challengeProfileBlockHtml(ch)).join('')}
+    </div>
+  `;
+}
+function challengeProfileBlockHtml(ch){
+  const relevant = ch.invites.filter(i => i.status === 'pending' || i.status === 'accepted');
+  return `
+    <div class="ab-goal-block">
+      <div class="ab-goal-title" style="display:flex; align-items:center; justify-content:space-between;">
+        <span>🏆 ${ch.title}</span>
+        <button class="btn-text" style="font-size:12px;" onclick="openChallengeManage(${jsAttr(ch.id)})">Manage</button>
+      </div>
+      ${relevant.length === 0 ? `<div class="stat-ab-empty">No one invited yet.</div>` : relevant.map(i => `
+        <div class="ab-person-row">
+          <span>${i.firstName}${i.lastName?' '+i.lastName:''}</span>
+          <span style="display:flex; align-items:center; gap:8px;">
+            ${abInviteStatusBadgeHtml(i.status)}
+            <button class="btn-text" style="font-size:12px; color:var(--danger); padding:0;" onclick="confirmRemoveChallengeInvite(${jsAttr(i.id)}, ${jsAttr(i.firstName)})">Remove</button>
+          </span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+// Same shape as confirmRemoveAbBuddy: revoking a pending invite just
+// cancels it; revoking an accepted one also drops them as a participant,
+// since "remove this person" should mean the same thing either way.
+function confirmRemoveChallengeInvite(inviteId, name){
+  confirmModal(
+    `Remove ${name}?`,
+    "They'll lose access to this challenge if they already joined, and the invite will show as revoked. You can always invite someone new.",
+    () => doRemoveChallengeInvite(inviteId)
+  );
+}
+async function doRemoveChallengeInvite(inviteId){
+  const { data: invite, error: fetchErr } = await sbClient.from('challenge_invites')
+    .select('challenge_id, accepted_by_user_id').eq('id', inviteId).single();
+  if(fetchErr){ showToast("Couldn't find that invite — " + fetchErr.message); return; }
+
+  const { error: updErr } = await sbClient.from('challenge_invites').update({ status: 'revoked' }).eq('id', inviteId);
+  if(updErr){ showToast("Couldn't remove — " + updErr.message); return; }
+
+  if(invite.accepted_by_user_id){
+    const { error: partErr } = await sbClient.from('challenge_participants')
+      .update({ active: false })
+      .eq('challenge_id', invite.challenge_id)
+      .eq('user_id', invite.accepted_by_user_id);
+    if(partErr) showToast("Removed the invite, but couldn't fully remove them as a participant — " + partErr.message);
+  }
+
+  await loadChallenges();
+  showToast('Removed');
+  render('profile');
+}
 function profileAbSectionHtml(){
   const byGoal = {};
   myAbInvites.forEach(inv => {
@@ -5620,7 +5730,6 @@ function viewChallengeDetail(){
   const status = challengeStatus(ch);
   const board = challengeLeaderboard(ch);
   const isCreator = ch.creatorUserId === currentUser.id;
-  const medals = ['🥇','🥈','🥉'];
   const pendingInvites = ch.invites.filter(i => i.status !== 'accepted');
 
   return `
@@ -5635,23 +5744,23 @@ function viewChallengeDetail(){
       <span>${status.phase==='upcoming' ? `Starts in <strong>${status.days}d</strong>` : status.phase==='ended' ? '<strong>Ended</strong>' : `<strong>${status.days}d</strong> left`}</span>
       <span>${ch.startDate} → ${ch.endDate}</span>
     </div>
-    <div class="stat-section-title" style="margin-top:0;">Leaderboard</div>
-    ${board.map((p,i) => `
-      <div class="leaderboard-row ${p.userId===currentUser.id ? 'is-me' : ''}">
-        <div class="leaderboard-rank ${i<3?'medal':''}">${i<3 ? medals[i] : (i+1)}</div>
-        <div class="leaderboard-name">${p.displayName}${p.userId===currentUser.id ? '<span class="you-tag">YOU</span>' : ''}</div>
-        <div>
-          <div class="leaderboard-points">${p.points}</div>
-          <div class="leaderboard-points-label">points</div>
-        </div>
-      </div>
-    `).join('')}
+
+    ${challengeLeaderboardCardHtml(ch, board)}
+
+    <div class="section-divider"></div>
+
     ${status.phase !== 'ended' ? `
-      <div class="stat-section-title">Log today</div>
-      ${ch.items.map(it => challengeItemLogBoxHtml(ch, it)).join('')}
-    ` : ''}
-    <div class="stat-section-title">Items${isCreator ? ' (tap to edit)' : ''}</div>
-    ${ch.items.map(it => challengeItemRowHtml(ch, it, isCreator)).join('')}
+      <div class="log-section-card">
+        <div class="log-section-title">📝 Log your progress</div>
+        ${ch.items.map(it => challengeItemLogBoxHtml(ch, it)).join('')}
+      </div>
+    ` : `
+      <div class="log-section-card">
+        <div class="log-section-title">Items</div>
+        ${ch.items.map(it => challengeItemRowHtml(ch, it, false)).join('')}
+      </div>
+    `}
+
     ${pendingInvites.length ? `
       <div class="stat-section-title">Invited, not joined yet</div>
       ${pendingInvites.map(i => `
@@ -5661,13 +5770,50 @@ function viewChallengeDetail(){
         </div>
       `).join('')}
     ` : ''}
-    ${isCreator ? challengeManageSectionHtml(ch) : `
-      <div class="stat-section-title">Leave</div>
-      <button class="btn btn-ghost btn-block" onclick="confirmLeaveChallenge()">Leave this challenge</button>
+
+    ${isCreator ? `
+      <button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="openChallengeManage(${jsAttr(ch.id)})">⚙️ Manage this challenge</button>
+    ` : `
+      <button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="confirmLeaveChallenge()">Leave this challenge</button>
     `}
   `;
 }
-// ---- item display / inline edit (creator only) ----
+// A "nicer" leaderboard: avatar initials, a points bar scaled against the
+// leader so the gap is visible at a glance, and its own card so it reads
+// as clearly separate from the logging section below it.
+function challengeLeaderboardCardHtml(ch, board){
+  const medals = ['🥇','🥈','🥉'];
+  const maxPts = Math.max(1, ...board.map(p => p.points));
+  return `
+    <div class="leaderboard-card">
+      <div class="leaderboard-card-title">🏆 Leaderboard</div>
+      ${board.map((p,i) => `
+        <div class="lb-row ${p.userId===currentUser.id ? 'is-me' : ''}">
+          <div class="lb-rank ${i<3?'medal':''}">${i<3 ? medals[i] : (i+1)}</div>
+          <div class="lb-avatar" style="background:${avatarColor(p.displayName)};">${(p.displayName||'?').trim().charAt(0).toUpperCase()}</div>
+          <div class="lb-main">
+            <div class="lb-name">${p.displayName}${p.userId===currentUser.id ? '<span class="you-tag">YOU</span>' : ''}</div>
+            <div class="lb-bar-track"><div class="lb-bar-fill" style="width:${Math.max(4, p.points/maxPts*100)}%; background:${i===0 ? '#E8B923' : 'var(--green)'};"></div></div>
+          </div>
+          <div class="lb-points-wrap">
+            <div class="lb-points">${p.points}</div>
+            <div class="lb-points-label">pts</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+function avatarColor(name){
+  const palette = ['#6FBF3E','#3E8FD6','#8B5FBF','#E8823C','#D24B4B','#3EC6C6'];
+  let hash = 0;
+  const s = name || '?';
+  for(let i=0; i<s.length; i++) hash = (hash*31 + s.charCodeAt(i)) % palette.length;
+  return palette[Math.abs(hash) % palette.length];
+}
+
+// ---- item display / inline edit — editing only reachable from the
+// Manage screen now (isCreator is only ever passed true from there) ----
 function challengeItemRowHtml(ch, item, isCreator){
   if(isCreator && editingChallengeItemId === item.id){
     return challengeItemEditFormHtml(item);
@@ -5681,7 +5827,7 @@ function challengeItemRowHtml(ch, item, isCreator){
 }
 function toggleEditChallengeItem(itemId){
   editingChallengeItemId = editingChallengeItemId === itemId ? null : itemId;
-  render('challenge-detail');
+  render('challenge-manage');
 }
 function challengeItemEditFormHtml(item){
   const targetField = item.category === 'withhold' ? '' : `
@@ -5706,7 +5852,7 @@ function challengeItemEditFormHtml(item){
       ${pointsFields}
       <div class="hint" style="margin:8px 0;">Changing the target or points rescores every day already logged, not just going forward.</div>
       <div class="btn-row">
-        <button class="btn btn-ghost" style="flex:1;" onclick="editingChallengeItemId=null; render('challenge-detail');">Cancel</button>
+        <button class="btn btn-ghost" style="flex:1;" onclick="editingChallengeItemId=null; render('challenge-manage');">Cancel</button>
         <button class="btn btn-ghost" style="flex:1; color:var(--danger);" onclick="confirmRemoveChallengeItem(${jsAttr(item.id)}, ${jsAttr(item.label)})">Remove item</button>
         <button class="btn btn-primary" style="flex:1;" onclick="saveChallengeItemEdit(${jsAttr(item.id)})">Save</button>
       </div>
@@ -5733,7 +5879,7 @@ async function saveChallengeItemEdit(itemId){
   editingChallengeItemId = null;
   await loadChallenges();
   showToast('Saved');
-  render('challenge-detail');
+  render('challenge-manage');
 }
 function confirmRemoveChallengeItem(itemId, label){
   confirmModal(
@@ -5748,12 +5894,30 @@ async function doRemoveChallengeItem(itemId){
   editingChallengeItemId = null;
   await loadChallenges();
   showToast('Removed');
-  render('challenge-detail');
+  render('challenge-manage');
 }
-// ---- creator management section ----
-function challengeManageSectionHtml(ch){
+
+// ---- Manage screen — reached from Profile, not from the detail screen.
+// Everything a creator can change about a challenge lives here now: name/
+// dates, items and their points, participants, invites, end-early/delete.
+function openChallengeManage(id){
+  currentChallengeId = id;
+  moreInvitesDraft = [];
+  editingChallengeItemId = null;
+  render('challenge-manage');
+}
+function viewChallengeManage(){
+  const ch = myChallenges.find(c => c.id === currentChallengeId);
+  if(!ch) return `<div class="empty-state" style="text-align:center;"><p>Challenge not found.</p><button class="btn btn-ghost" onclick="render('profile')">Back to Profile</button></div>`;
+  if(ch.creatorUserId !== currentUser.id) return `<div class="empty-state" style="text-align:center;"><p>Only the creator can manage this challenge.</p><button class="btn btn-ghost" onclick="render('profile')">Back to Profile</button></div>`;
   return `
-    <div class="stat-section-title">Manage challenge</div>
+    <div class="wizard-head">
+      <div class="back-btn" onclick="render('profile')">${chevron()}</div>
+      <div>
+        <div class="step-title">Manage: ${ch.title}</div>
+        <div class="step-sub">Everything about this challenge lives here.</div>
+      </div>
+    </div>
     <div class="field">
       <label>Name</label>
       <input type="text" id="edit-ch-title" value="${ch.title}">
@@ -5763,6 +5927,9 @@ function challengeManageSectionHtml(ch){
       <div class="field"><label>End date</label><input type="date" id="edit-ch-end" value="${ch.endDate}"></div>
     </div>
     <button class="btn btn-ghost btn-block" style="margin-bottom:18px;" onclick="saveChallengeMeta()">Save name/dates</button>
+
+    <div class="stat-section-title" style="margin-top:0;">Items (tap to edit)</div>
+    ${ch.items.map(it => challengeItemRowHtml(ch, it, true)).join('')}
 
     <div class="stat-section-title">Participants</div>
     ${ch.participants.map(p => `
@@ -5793,7 +5960,7 @@ async function saveChallengeMeta(){
   if(error){ showToast("Couldn't save — " + error.message); return; }
   await loadChallenges();
   showToast('Saved');
-  render('challenge-detail');
+  render('challenge-manage');
 }
 function confirmRemoveChallengeParticipant(userId, name){
   confirmModal(
@@ -5807,7 +5974,7 @@ async function doRemoveChallengeParticipant(userId){
   if(error){ showToast("Couldn't remove — " + error.message); return; }
   await loadChallenges();
   showToast('Removed');
-  render('challenge-detail');
+  render('challenge-manage');
 }
 function confirmLeaveChallenge(){
   confirmModal(
@@ -5835,7 +6002,7 @@ async function doEndChallengeEarly(){
   if(error){ showToast("Couldn't end it — " + error.message); return; }
   await loadChallenges();
   showToast('Challenge ended');
-  render('challenge-detail');
+  render('challenge-manage');
 }
 function confirmDeleteChallenge(){
   confirmModal(
@@ -5849,7 +6016,7 @@ async function doDeleteChallenge(){
   if(error){ showToast("Couldn't delete — " + error.message); return; }
   await loadChallenges();
   showToast('Challenge deleted');
-  render('challenges');
+  render('profile');
 }
 function challengeItemLogBoxHtml(ch, item){
   const myLogs = challengeItemUserLogs(ch, item, currentUser.id);
@@ -5947,9 +6114,9 @@ function addMoreInvite(){
   if(!firstName){ showToast('First name is required'); return; }
   if(!val) return;
   moreInvitesDraft.push({ firstName, lastName, type, value: val });
-  render('challenge-detail');
+  render('challenge-manage');
 }
-function removeMoreInvite(j){ moreInvitesDraft.splice(j,1); render('challenge-detail'); }
+function removeMoreInvite(j){ moreInvitesDraft.splice(j,1); render('challenge-manage'); }
 async function sendMoreChallengeInvites(){
   if(moreInvitesDraft.length === 0){ showToast('Add at least one person first'); return; }
   const ch = myChallenges.find(c => c.id === currentChallengeId);
@@ -5966,7 +6133,7 @@ async function sendMoreChallengeInvites(){
   moreInvitesDraft = [];
   await loadChallenges();
   showToast('Invites sent');
-  render('challenge-detail');
+  render('challenge-manage');
 }
 
 
