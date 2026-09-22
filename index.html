@@ -5091,6 +5091,38 @@ function challengeSummaryLabel(ch){
 }
 
 // ---- list view ----
+function viewChallenges(){
+  if(myChallenges.length === 0){
+    return `
+      <div class="empty-state" style="text-align:center;">
+        <div style="margin-bottom:18px; font-size:48px;">🏆</div>
+        <h2>Start your first challenge</h2>
+        <p style="margin-left:auto; margin-right:auto;">Invite people, add one or more targets, and see who's got the discipline to win it.</p>
+        <button class="btn btn-primary" onclick="startNewChallenge()">Create a challenge</button>
+      </div>
+    `;
+  }
+  const cards = myChallenges.map(challengeCardHtml).join('');
+  return `${cards}<button class="btn btn-ghost btn-block" onclick="startNewChallenge()" style="margin-top:8px;">Create another challenge</button>`;
+}
+function challengeCardHtml(ch){
+  const status = challengeStatus(ch);
+  const board = challengeLeaderboard(ch);
+  const meIdx = board.findIndex(p => p.userId === currentUser.id);
+  const statusText = status.phase === 'upcoming' ? `Starts in ${status.days}d`
+    : status.phase === 'ended' ? 'Challenge ended'
+    : `${status.days}d left`;
+  return `
+    <div class="goal-card" style="border-left: 4px solid var(--navy); border-top-left-radius:6px; border-bottom-left-radius:6px;" onclick="openChallengeDetail(${jsAttr(ch.id)})">
+      <div class="challenge-card-emoji">🏆</div>
+      <div class="info">
+        <h3>${ch.title}</h3>
+        <div class="meta">${challengeSummaryLabel(ch)} · ${board.length} ${board.length===1?'player':'players'}</div>
+        <div class="meta" style="margin-top:4px;">${statusText}${meIdx>=0 ? ` · You're #${meIdx+1} with ${board[meIdx].points} pts` : ''}</div>
+      </div>
+    </div>
+  `;
+}
 function startNewChallenge(){
   challengeDraft = { title:'', startDate: todayKey(), endDate: dateKey(addDays(new Date(), 30)), items: [], invites: [] };
   render('challenge-new-name');
