@@ -1135,6 +1135,18 @@
     display:flex; align-items:center; justify-content:center; cursor:pointer;
   }
   .celebration-video-wrap video{ width:100%; display:block; }
+  .celebration-banner-top{
+    position:absolute; top:0; left:0; right:0;
+    background: linear-gradient(to bottom, rgba(16,25,47,.78), transparent);
+    color:#fff; font-family:'Poppins',sans-serif; font-weight:700; font-size:15px;
+    text-align:center; padding: 14px 16px 26px;
+  }
+  .celebration-banner-bottom{
+    position:absolute; left:10px; bottom:10px;
+    background: rgba(16,25,47,.68); color:#fff;
+    font-family:'Poppins',sans-serif; font-weight:700; font-size:12.5px;
+    padding: 6px 13px; border-radius:999px;
+  }
   .streak-celebrate{
     position:relative; height:180px;
     display:flex; align-items:center; justify-content:center;
@@ -1948,6 +1960,7 @@ async function processPendingInvite(){
     await loadMyAbInvites();
     await loadChallenges();
     await loadFuelfamLink();
+    await loadRandomCelebrationPool();
     openModal(`
       <div class="modal-title">You're in! 🎉</div>
       <div class="modal-desc" style="text-align:left; line-height:1.5;">
@@ -2023,6 +2036,7 @@ async function checkAuthAndProceed(){
     await loadMyAbInvites();
     await loadChallenges();
     await loadFuelfamLink();
+    await loadRandomCelebrationPool();
     proceedAfterAuth();
   } else {
     showAuthScreen('login');
@@ -2103,6 +2117,7 @@ async function submitSignUp(){
     await loadMyAbInvites();
     await loadChallenges();
     await loadFuelfamLink();
+    await loadRandomCelebrationPool();
     proceedAfterAuth();
   } else {
     // signUp() itself decided to withhold a session and would normally ask
@@ -2123,6 +2138,7 @@ async function submitSignUp(){
       await loadMyAbInvites();
       await loadChallenges();
       await loadFuelfamLink();
+      await loadRandomCelebrationPool();
       proceedAfterAuth();
     } else {
       // Genuinely could not get a session — now it's a real dead end worth
@@ -2149,6 +2165,7 @@ async function submitLogIn(){
   await loadMyAbInvites();
   await loadChallenges();
   await loadFuelfamLink();
+  await loadRandomCelebrationPool();
   proceedAfterAuth();
 }
 
@@ -2229,6 +2246,24 @@ const MILESTONE_VIDEO = {
 };
 let celebrationQueue = [];
 let celebrationShowing = false;
+// Videos in Supabase Storage under assets/random/ — anything uploaded
+// there becomes fair game for a non-milestone day's celebration. Loaded
+// once at login (see the auth-load call sites) rather than per-check, so
+// a normal completion doesn't cost a network round trip.
+let randomCelebrationPool = null;
+async function loadRandomCelebrationPool(){
+  try{
+    const { data, error } = await sbClient.storage.from('assets').list('random');
+    if(error || !data){ randomCelebrationPool = []; return; }
+    randomCelebrationPool = data
+      .filter(f => f.name && /\.(mp4|mov|webm)$/i.test(f.name))
+      .map(f => `https://kblaaqddfyhsoakxtgjx.supabase.co/storage/v1/object/public/assets/random/${f.name}`);
+  }catch(e){ randomCelebrationPool = []; }
+}
+function pickRandomCelebrationVideo(){
+  if(!randomCelebrationPool || randomCelebrationPool.length === 0) return null;
+  return randomCelebrationPool[Math.floor(Math.random() * randomCelebrationPool.length)];
+}
 // `muted` reflects whether this celebration was triggered directly by a
 // tap (mark done, log food/steps — sound is much more likely to be
 // allowed by the browser right inside that click) versus a passive check
@@ -2242,24 +2277,44 @@ let celebrationShowing = false;
 // delay in between and the browser stops treating it as "you just did
 // this," and silently blocks audio — that was the actual bug behind the
 // muted-by-default behavior before.
-function queueCelebration(streak, forceMuted, unitWord, goalTitle){
-  celebrationQueue.push({ streak, forceMuted: !!forceMuted, unitWord: unitWord || 'day', goalTitle: goalTitle || '' });
+function queueCelebration(opts){
+  celebrationQueue.push(opts);
   if(!celebrationShowing) playNextCelebration();
 }
 function playNextCelebration(){
   if(celebrationShowing || !celebrationQueue.length) return;
   celebrationShowing = true;
-  const next = celebrationQueue.shift();
-  celebrateStreak(next.streak, next.forceMuted, next.unitWord, next.goalTitle);
+  celebrateStreak(celebrationQueue.shift());
 }
-function celebrateStreak(num, forceMuted, unitWord, goalTitle){
-  unitWord = unitWord || 'day';
+// opts: { type: 'milestone'|'random', num, forceMuted, unitWord, goalTitle }.
+// Milestone videos carry their own branded messaging, so no banners there —
+// the random pool is generic footage, so the goal name (top) and which day
+// this is (bottom) are overlaid so it's still clear what's being celebrated.
+function celebrateStreak(opts){
+  opts = typeof opts === 'number' ? { type:'milestone', num: opts } : opts; // legacy positional call site (preview)
+  const type = opts.type || 'milestone';
+  const num = opts.num;
+  const forceMuted = !!opts.forceMuted;
+  const unitWord = opts.unitWord || 'day';
+  const goalTitle = opts.goalTitle || '';
   const overlay = document.getElementById('celebration-overlay');
   const card = document.getElementById('celebration-card');
-  const videoSrc = MILESTONE_VIDEO[num];
+  const videoSrc = type === 'milestone' ? MILESTONE_VIDEO[num] : pickRandomCelebrationVideo();
+  if(type === 'random' && !videoSrc){
+    // Pool emptied out from under us (or never finished loading) — nothing
+    // to show; move straight on rather than leave a broken card up.
+    closeCelebration();
+    return;
+  }
   const shareBtn = `<button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="closeCelebration(); openShareSheet(${num}, '${unitWord}', ${jsAttr(goalTitle || '')});">Share this streak</button>`;
+  const dayBannerText = `${unitWord.charAt(0).toUpperCase()+unitWord.slice(1)} ${num}`;
+  const banners = type === 'random' ? `
+    <div class="celebration-banner-top">${goalTitle}</div>
+    <div class="celebration-banner-bottom">${dayBannerText}</div>
+  ` : '';
   card.innerHTML = videoSrc ? `
     <div class="celebration-video-wrap">
+      ${banners}
       <video id="celebration-video" src="${videoSrc}" autoplay ${forceMuted ? 'muted' : ''} playsinline></video>
     </div>
     ${shareBtn}
@@ -2472,12 +2527,24 @@ function maybeCelebrateWithholdStreak(g, streak, slippedToday){
 // that isn't triggered directly by a tap. `unitWord` feeds the in-popup
 // Share button so it labels the card correctly (day/week/month).
 function checkAndCelebrate(g, key, streakValue, unitWord, muted){
-  if(!STREAK_MILESTONES.includes(streakValue)) return;
+  if(!streakValue || streakValue <= 0) return; // a broken/zero streak is never a celebration
   g.streakCelebrations = g.streakCelebrations || {};
-  const milestoneKey = key + '_m' + streakValue;
-  if(g.streakCelebrations[milestoneKey]) return;
-  g.streakCelebrations[milestoneKey] = true;
-  queueCelebration(streakValue, !!muted, unitWord, g.title);
+  if(STREAK_MILESTONES.includes(streakValue)){
+    const milestoneKey = key + '_m' + streakValue;
+    if(g.streakCelebrations[milestoneKey]) return;
+    g.streakCelebrations[milestoneKey] = true;
+    queueCelebration({ type:'milestone', num: streakValue, forceMuted: !!muted, unitWord, goalTitle: g.title });
+    return;
+  }
+  // Every other completed day — a random pick from whatever's been
+  // uploaded to assets/random/, so nothing goes uncelebrated. Silently
+  // does nothing if that folder is still empty, same as before this
+  // existed at all.
+  if(!randomCelebrationPool || randomCelebrationPool.length === 0) return;
+  const randomKey = key + '_r' + streakValue;
+  if(g.streakCelebrations[randomKey]) return;
+  g.streakCelebrations[randomKey] = true;
+  queueCelebration({ type:'random', num: streakValue, forceMuted: !!muted, unitWord, goalTitle: g.title });
 }
 // Checks every enabled nutrition metric's current streak against the
 // milestone list, right after a food/water log — per metric, not once for
@@ -4317,17 +4384,22 @@ function replayOnboarding(){
 // Testing hook for the celebration itself — real video for 1, live
 // component for anything else, so both paths are easy to check on demand.
 function previewStreakCelebration(){
-  chooseModal('Preview which milestone?', [
+  chooseModal('Preview which one?', [
     { value:'1', label:'1 Day' },
     { value:'2', label:'2 Days' },
     { value:'3', label:'3 Days' },
     { value:'7', label:'1 Week' },
     { value:'30', label:'1 Month' },
     { value:'90', label:'3 Months' },
-    { value:'365', label:'1 Year' }
+    { value:'365', label:'1 Year' },
+    { value:'random', label:'🎲 A non-milestone day (random pool)' }
   ], (val) => {
-    celebrateStreak(parseInt(val));
-  }, "These are the only 7 moments that actually celebrate — every other day just quietly updates the streak number.");
+    if(val === 'random'){
+      queueCelebration({ type:'random', num: 12, forceMuted:false, unitWord:'day', goalTitle:'Preview Goal' });
+      return;
+    }
+    celebrateStreak({ type:'milestone', num: parseInt(val), forceMuted:false, unitWord:'day', goalTitle:'' });
+  }, "1/2/3/7/30/90/365 play the 7 branded milestone videos. Every other completed day now pulls a random clip from assets/random/, with the goal name and day count overlaid.");
 }
 function resetDemoData(){
   confirmModal('Reset demo data?', 'Permanently deletes every goal on your account, plus local notifications and logs. This cannot be undone.', async () => {
