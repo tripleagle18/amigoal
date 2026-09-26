@@ -1134,6 +1134,12 @@
     background:rgba(16,25,47,.55); color:#fff; font-size:15px;
     display:flex; align-items:center; justify-content:center; cursor:pointer;
   }
+  .celebration-close-btn{
+    position:absolute; top:10px; right:10px; z-index:2;
+    width:30px; height:30px; border-radius:50%; border:none;
+    background:rgba(16,25,47,.55); color:#fff; font-size:14px;
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+  }
   .celebration-video-wrap video{ width:100%; display:block; }
   .celebration-banner-top{
     position:absolute; top:0; left:0; right:0;
@@ -2315,6 +2321,7 @@ function celebrateStreak(opts){
   card.innerHTML = videoSrc ? `
     <div class="celebration-video-wrap">
       ${banners}
+      <button class="celebration-close-btn" onclick="closeCelebration()" aria-label="Close">✕</button>
       <video id="celebration-video" src="${videoSrc}" autoplay ${forceMuted ? 'muted' : ''} playsinline></video>
     </div>
     ${shareBtn}
@@ -2345,7 +2352,11 @@ function celebrateStreak(opts){
   });
   if(videoSrc){
     const vid = document.getElementById('celebration-video');
-    vid.addEventListener('ended', closeCelebration, { once:true });
+    // No auto-close on 'ended' anymore — the video just stops on its last
+    // frame and stays on screen (banners included) until the person
+    // dismisses it themselves, via the ✕, the share button, or tapping
+    // the backdrop. Previously this force-closed the instant playback
+    // finished, which didn't leave any time to actually read the banners.
     if(forceMuted){
       // Withhold's streak check fires passively when the log page renders,
       // not from a tap — there's no gesture to preserve, so don't even
