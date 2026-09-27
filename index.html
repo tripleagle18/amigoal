@@ -1140,6 +1140,29 @@
     background:rgba(16,25,47,.55); color:#fff; font-size:14px;
     display:flex; align-items:center; justify-content:center; cursor:pointer;
   }
+  /* Video celebrations go edge-to-edge instead of sitting in the small
+     modal-style card — a phone-filling video read as "it's not full
+     screen" when boxed into a 360px card with visible backdrop around it.
+     Padding here is a fixed estimate for the iPhone status-bar/home-
+     indicator area rather than env(safe-area-inset-*), since turning on
+     viewport-fit=cover to make that work for real is a page-wide change
+     that could shift every other fixed-position element in the app (the
+     bottom nav included) — too risky to do for one screen without a
+     device to verify the rest of the app against afterward. */
+  .celebration-overlay.video-mode{ padding:0; background:#000; }
+  .celebration-card.video-mode{
+    width:100%; height:100%; max-width:none; max-height:none;
+    padding:0; border-radius:0; box-shadow:none; background:#000;
+  }
+  .celebration-video-wrap.fullscreen{ width:100%; height:100%; border-radius:0; }
+  .celebration-video-wrap.fullscreen video{ height:100%; object-fit:cover; }
+  .celebration-video-wrap.fullscreen .celebration-close-btn{ top:44px; }
+  .celebration-video-wrap.fullscreen .celebration-banner-top{ padding-top:44px; }
+  .celebration-video-wrap.fullscreen .celebration-banner-bottom{ bottom:92px; }
+  .celebration-floating-share{
+    position:absolute; left:16px; right:16px; bottom:34px; z-index:2;
+  }
+  .celebration-floating-share .btn{ background:rgba(16,25,47,.55); color:#fff; border-color:rgba(255,255,255,.3); }
   .celebration-video-wrap video{ width:100%; display:block; }
   .celebration-banner-top{
     position:absolute; top:0; left:0; right:0;
@@ -2318,13 +2341,23 @@ function celebrateStreak(opts){
     <div class="celebration-banner-top">${goalTitle}</div>
     <div class="celebration-banner-bottom">${dayBannerText}</div>
   ` : '';
+  // Video celebrations go truly edge-to-edge (no card, no padding) — the
+  // previous version wrapped the video in the same small modal-style card
+  // used for confirm dialogs, which left visible backdrop on every side
+  // even on a phone screen. The floating share button overlays the video
+  // near the bottom rather than pushing it below, so the video itself
+  // still fills the whole screen. object-fit:cover crops to fill rather
+  // than letterboxing, which looks right as long as source clips are shot
+  // roughly phone-portrait — worth knowing if a clip looks over-cropped.
+  overlay.classList.toggle('video-mode', !!videoSrc);
+  card.classList.toggle('video-mode', !!videoSrc);
   card.innerHTML = videoSrc ? `
-    <div class="celebration-video-wrap">
+    <div class="celebration-video-wrap fullscreen">
       ${banners}
       <button class="celebration-close-btn" onclick="closeCelebration()" aria-label="Close">✕</button>
       <video id="celebration-video" src="${videoSrc}" autoplay ${forceMuted ? 'muted' : ''} playsinline></video>
+      <div class="celebration-floating-share">${shareBtn}</div>
     </div>
-    ${shareBtn}
   ` : `
     <div class="streak-celebrate">
       <div class="streak-ripple r1"></div>
@@ -2405,9 +2438,12 @@ function toggleCelebrationSound(){
 }
 function closeCelebration(){
   const overlay = document.getElementById('celebration-overlay');
+  const card = document.getElementById('celebration-card');
   const vid = document.getElementById('celebration-video');
   if(vid) vid.pause();
   overlay.style.display = 'none';
+  overlay.classList.remove('video-mode');
+  card.classList.remove('video-mode');
   celebrationShowing = false;
   // No delay here either — if another celebration is queued, this call
   // itself is (usually) inside a tap handler (closing via the button or
