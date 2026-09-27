@@ -2727,7 +2727,6 @@ function render(view, payload){
   else if(view === 'withhold-form') app.innerHTML = viewWithholdForm();
   else if(view === 'digest-preview') app.innerHTML = viewDigestPreview();
   else if(view === 'profile') app.innerHTML = viewProfile();
-  else if(view === 'log') app.innerHTML = viewLog();
   else if(view === 'supporting') app.innerHTML = viewSupporting();
   else if(view === 'challenges') app.innerHTML = viewChallenges();
   else if(view === 'challenge-new-name') app.innerHTML = viewChallengeNewName();
@@ -2768,15 +2767,11 @@ let currentView = 'dashboard';
 function renderNav(){
   const nav = document.getElementById('bottom-nav');
   if(!nav) return;
-  const onHome = currentView !== 'profile' && currentView !== 'log' && currentView !== 'supporting' && currentView.indexOf('challenge') !== 0;
+  const onHome = currentView !== 'profile' && currentView !== 'supporting' && currentView.indexOf('challenge') !== 0;
   nav.innerHTML = `
     <button class="nav-item ${onHome?'active':''}" onclick="goHome()">
       <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><path d="M4 11.5L12 4l8 7.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 10v9a1 1 0 001 1h10a1 1 0 001-1v-9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Home
-    </button>
-    <button class="nav-item ${currentView==='log'?'active':''}" onclick="render('log')">
-      <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><rect x="5" y="4" width="14" height="16" rx="2" stroke="currentColor" stroke-width="2"/><path d="M8.5 9h7M8.5 13h7M8.5 17h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-      Log
     </button>
     <button class="nav-item ${currentView.indexOf('challenge')===0?'active':''}" onclick="render('challenges')">
       <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><path d="M8 21h8M12 17v4M6 4h12v3a6 6 0 01-12 0V4z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 5H3v1a4 4 0 004 4M18 5h3v1a4 4 0 01-4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -3371,6 +3366,8 @@ function goalStatsModalHtml(g){
   return `
     ${goalStatsHeaderHtml(g)}
     <div class="stat-modal-scroll">
+      ${goalStatsLogSectionHtml(g)}
+      <div class="section-divider"></div>
       ${goalStatsStreakSectionHtml(g)}
       ${goalStatsAbSectionHtml(g)}
     </div>
@@ -3384,6 +3381,7 @@ function openGoalStatsModal(goalId){
   const g = goals.find(x => x.id === goalId);
   if(!g) return;
   ensureLogArrays(g);
+  currentModalGoalId = goalId;
   openModal(goalStatsModalHtml(g));
 }
 
@@ -4468,6 +4466,10 @@ function resetDemoData(){
 // LOG PAGE
 // =========================================================================
 let currentLogDate = todayKey();
+// Which goal's stats modal is currently open, so date-nav inside it knows
+// what to re-render — the Log tab used to own one shared date across every
+// goal's card on one page; now each goal's own modal carries its own nav.
+let currentModalGoalId = null;
 
 function earliestLoggableDate(){
   let earliest = todayKey();
@@ -4478,13 +4480,13 @@ function earliestLoggableDate(){
   });
   return earliest;
 }
-function changeLogDay(delta){
+function changeModalLogDay(delta){
   const d = addDays(parseDateKey(currentLogDate), delta);
   const k = dateKey(d);
   if(k > todayKey()) return; // no future
   if(k < earliestLoggableDate()) return; // no data that far back
   currentLogDate = k;
-  render('log');
+  openGoalStatsModal(currentModalGoalId);
 }
 function dayLabel(dateStr){
   if(dateStr === todayKey()) return 'Today';
@@ -4492,48 +4494,35 @@ function dayLabel(dateStr){
   const d = parseDateKey(dateStr);
   return d.toLocaleDateString([], { month:'short', day:'numeric', year: d.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined });
 }
-function dayNavHtml(){
+function modalDayNavHtml(){
   const canGoBack = currentLogDate > earliestLoggableDate();
   const canGoForward = currentLogDate < todayKey();
   return `
     <div class="day-nav">
-      <button class="day-nav-arrow" onclick="changeLogDay(-1)" ${canGoBack?'':'disabled'} aria-label="Previous day">‹</button>
+      <button class="day-nav-arrow" onclick="changeModalLogDay(-1)" ${canGoBack?'':'disabled'} aria-label="Previous day">‹</button>
       <div class="day-nav-label">${dayLabel(currentLogDate)}</div>
-      <button class="day-nav-arrow" onclick="changeLogDay(1)" ${canGoForward?'':'disabled'} aria-label="Next day">›</button>
+      <button class="day-nav-arrow" onclick="changeModalLogDay(1)" ${canGoForward?'':'disabled'} aria-label="Next day">›</button>
     </div>
   `;
 }
-
-function viewLog(){
-  goals.forEach(ensureLogArrays);
+// Replaces the old dedicated Log tab — the same 4 per-category log cards
+// now render inline inside a goal's stats modal (hideTitle:true since the
+// modal already shows the goal's name in its own header) instead of all
+// goals stacked on one separate page.
+function goalStatsLogSectionHtml(g){
+  ensureLogArrays(g);
   if(currentLogDate > todayKey()) currentLogDate = todayKey();
-  if(goals.length === 0){
-    return `
-      <div style="margin-bottom:18px;"><div class="step-title" style="font-size:22px;">Log</div></div>
-      <div class="empty-state">
-        <p>No goals to log yet — set one up first.</p>
-        <button class="btn btn-primary" onclick="startNewGoal()">Add a goal</button>
-      </div>
-    `;
-  }
-  const order = { nutrition: 0, steps: 1, withhold: 2, custom: 3 };
-  const sortedGoals = [...goals].sort((a,b) => (order[a.category]??9) - (order[b.category]??9));
-  return `
-    <div style="margin-bottom:14px;"><div class="step-title" style="font-size:22px;">Log</div></div>
-    ${dayNavHtml()}
-    ${sortedGoals.map(g => {
-      if(g.category === 'nutrition') return nutritionLogCardHtml(g);
-      if(g.category === 'steps') return stepsLogCardHtml(g);
-      if(g.category === 'withhold') return withholdLogCardHtml(g);
-      return customLogCardHtml(g);
-    }).join('')}
-  `;
+  const card = g.category === 'nutrition' ? nutritionLogCardHtml(g, true)
+    : g.category === 'steps' ? stepsLogCardHtml(g, true)
+    : g.category === 'withhold' ? withholdLogCardHtml(g, true)
+    : customLogCardHtml(g, true);
+  return `${modalDayNavHtml()}${card}`;
 }
 
 // ---------------------------------------------------------------------
 // NUTRITION LOGGING
 // ---------------------------------------------------------------------
-function nutritionLogCardHtml(g){
+function nutritionLogCardHtml(g, hideTitle){
   const d = currentLogDate;
   const totals = foodTotalsOnDate(g, d);
   const water = waterTotalOnDate(g, d);
@@ -4543,7 +4532,7 @@ function nutritionLogCardHtml(g){
 
   return `
     <div class="log-goal-card">
-      <h2>${g.title}</h2>
+      ${hideTitle ? '' : `<h2>${g.title}</h2>`}
       <div class="log-goal-sub">${isToday ? "Today's" : dayLabel(d) + "'s"} progress</div>
 
       ${macroMetrics.map(m => miniMetricRowHtml(m.label, totals[m.key]||0, m.value, m.unit, m.key, nutritionMetricStreak(g, m))).join('')}
@@ -4641,13 +4630,13 @@ async function addManualEntry(goalId){
 
   checkNutritionCelebrations(g);
   showToast('Logged');
-  render('log');
+  openGoalStatsModal(goalId);
 }
 
 // ---------------------------------------------------------------------
 // STEPS LOGGING
 // ---------------------------------------------------------------------
-function stepsLogCardHtml(g){
+function stepsLogCardHtml(g, hideTitle){
   const m = g.metrics[0];
   const d = currentLogDate;
   const win = getPeriodWindow(g, m, d);
@@ -4659,7 +4648,7 @@ function stepsLogCardHtml(g){
 
   return `
     <div class="log-goal-card">
-      <h2>${g.title}</h2>
+      ${hideTitle ? '' : `<h2>${g.title}</h2>`}
       <div class="log-goal-sub">${m.stepsMode === 'daily' ? 'Needs to hit target every day' : 'One running total for the period'}</div>
       ${miniMetricRowHtml(`Steps ${periodWord}`, total, target, 'steps', 'steps', stepsStreak(g))}
       <div class="log-tool">
@@ -4685,7 +4674,7 @@ async function logSteps(goalId){
   g.stepsLog.push({ id: data.id, date: data.log_date, value: data.value, loggedAt: new Date(data.logged_at).getTime() });
   checkStepsCelebration(g);
   showToast(`+${val} steps logged`);
-  render('log');
+  openGoalStatsModal(goalId);
 }
 // Streak milestones only need one guard key per goal (not per day/period)
 // since checkAndCelebrate already tracks "have we hit milestone N yet" —
@@ -4702,7 +4691,7 @@ function checkStepsCelebration(g){
 // ---------------------------------------------------------------------
 // CUSTOM GOAL LOGGING
 // ---------------------------------------------------------------------
-function customLogCardHtml(g){
+function customLogCardHtml(g, hideTitle){
   const m = g.metrics[0];
   const d = currentLogDate;
   const win = getPeriodWindow(g, m, d);
@@ -4715,7 +4704,7 @@ function customLogCardHtml(g){
 
   return `
     <div class="log-goal-card">
-      <h2>${g.title}</h2>
+      ${hideTitle ? '' : `<h2>${g.title}</h2>`}
       <div class="custom-progress-text">${count} of ${target} ${periodWord}</div>
       ${streak > 0 ? `<div class="mini-metric-streak" style="color:${sColor}; margin-bottom:10px;">${streak} ${streakLabel(streak, m.periodLabel)}</div>` : ''}
       <button class="custom-done-btn ${doneThatDay?'done':''}" ${doneThatDay?'disabled':''} onclick="markCustomDone('${g.id}')">
@@ -4735,7 +4724,7 @@ async function markCustomDone(goalId){
   g.customLog.push({ id: data.id, date: data.log_date, loggedAt: new Date(data.logged_at).getTime() });
   checkCustomCelebration(g);
   showToast('Nice — logged 🎉');
-  render('log');
+  openGoalStatsModal(goalId);
 }
 // Only fires for today — marking a past day done (if that's ever possible)
 // shouldn't pop a celebration for a period that's already over.
@@ -4749,7 +4738,7 @@ function checkCustomCelebration(g){
 // ---------------------------------------------------------------------
 // WITHHOLD / ABSTAIN LOGGING
 // ---------------------------------------------------------------------
-function withholdLogCardHtml(g){
+function withholdLogCardHtml(g, hideTitle){
   const d = currentLogDate;
   const streak = withholdStreakDays(g, d);
   const slippedThatDay = (g.slipLog||[]).some(e => e.date === d);
@@ -4758,7 +4747,7 @@ function withholdLogCardHtml(g){
 
   return `
     <div class="log-goal-card">
-      <h2>${g.title}</h2>
+      ${hideTitle ? '' : `<h2>${g.title}</h2>`}
       <div class="withhold-streak-display">
         <div class="withhold-streak-num count-up" data-target="${streak}" style="color:${streakColor(streak)};">0</div>
         <div class="withhold-streak-word">${streak === 1 ? 'day' : 'days'} since your last slip${isToday ? '' : ', as of ' + dayLabel(d).toLowerCase()}</div>
@@ -4784,7 +4773,7 @@ function confirmLogSlip(goalId){
     g.slipLog = (g.slipLog||[]).filter(e => e.date !== currentLogDate);
     g.slipLog.push({ id: data.id, date: data.log_date, loggedAt: new Date(data.logged_at).getTime() });
     showToast('Logged — tomorrow is day 1 again');
-    render('log');
+    openGoalStatsModal(goalId);
   });
 }
 async function undoSlip(goalId){
@@ -4794,7 +4783,7 @@ async function undoSlip(goalId){
   if(error){ showToast("Couldn't remove — " + error.message); return; }
   g.slipLog = (g.slipLog||[]).filter(e => e.date !== currentLogDate);
   showToast('Removed');
-  render('log');
+  openGoalStatsModal(goalId);
 }
 
 function profileUsernameSectionHtml(){
@@ -5210,14 +5199,14 @@ function profileWeightHistorySectionHtml(ng){
     return `
       <div class="profile-section">
         <h2>Weight history</h2>
-        <div class="weight-history-empty">No weigh-ins logged yet — this fills in once weigh-in logging is available from the Log page.</div>
+        <div class="weight-history-empty">No weigh-ins logged yet — this fills in once weigh-in logging is available from your nutrition goal's card.</div>
       </div>
     `;
   }
   return `
     <div class="profile-section">
       <h2>Weight history</h2>
-      <div class="weight-history-empty">Target: ${ng.targetWeight} — no weigh-ins logged yet. This chart will populate once weigh-in logging is available from the Log page.</div>
+      <div class="weight-history-empty">Target: ${ng.targetWeight} — no weigh-ins logged yet. This chart will populate once weigh-in logging is available from your nutrition goal's card.</div>
     </div>
   `;
 }
