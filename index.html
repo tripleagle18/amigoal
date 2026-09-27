@@ -2362,15 +2362,19 @@ function celebrateStreak(opts){
       // not from a tap — there's no gesture to preserve, so don't even
       // attempt sound; go straight to muted with the fallback icon visible
       // immediately instead of a doomed unmuted attempt first.
-      vid.play().catch(() => setTimeout(closeCelebration, 5200));
+      vid.play().catch(() => {});
       showSoundToggleIcon();
     } else {
       vid.play().catch(() => {
         // A real tap preceded this and the browser still blocked sound
         // anyway (happens occasionally, varies by browser) — fall back to
         // muted so the video still plays, with the icon as a recovery path.
+        // If even that fails, leave the celebration up regardless — there's
+        // no reason to auto-close it now that there's an explicit ✕; a
+        // stuck-on-first-frame video with working close controls beats one
+        // that vanishes on its own on a timer.
         vid.muted = true;
-        vid.play().catch(() => setTimeout(closeCelebration, 5200));
+        vid.play().catch(() => {});
         showSoundToggleIcon();
       });
     }
