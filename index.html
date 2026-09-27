@@ -1841,6 +1841,14 @@ function showToast(msg){
 function closeModal(){
   document.getElementById('modal-overlay').style.display = 'none';
   document.getElementById('modal-card').innerHTML = '';
+  // The page behind the modal was rendered before whatever just happened
+  // inside it (logging progress, removing someone, editing a target...) —
+  // without this, closing a modal left stale data on screen, e.g. the
+  // dashboard still showing "nothing logged today" right after actually
+  // logging something, since Home was never told anything changed. This
+  // makes closeModal always hand back an up-to-date view, regardless of
+  // which modal was open or what it did inside it.
+  render(currentView);
 }
 function openModal(html){
   document.getElementById('modal-card').innerHTML = html;
