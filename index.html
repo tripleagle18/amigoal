@@ -525,6 +525,24 @@
     font-weight: 800;
     font-size: 17px;
   }
+  .time-remaining-wrap{ margin-top: 8px; }
+  .time-remaining-track{
+    height: 6px;
+    border-radius: 999px;
+    background: #E9ECE0;
+    overflow: hidden;
+  }
+  .time-remaining-fill{
+    height: 100%;
+    border-radius: 999px;
+    transition: width .4s ease;
+  }
+  .time-remaining-label{
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+    font-weight: 600;
+  }
 
   .status-badge{
     font-size: 11.5px;
@@ -1519,7 +1537,8 @@ function dbGoalToClient(row, ext){
     createdAt: new Date(row.created_at).getTime(),
     foodLog, waterLog, stepsLog, customLog, slipLog,
     streakCelebrations: ext.streakCelebrations || {},
-    targetWeight: null, nutritionInputs: null
+    targetWeight: null, nutritionInputs: null,
+    hidden: !!row.hidden
   };
   // nutrition_profiles is a true 1:1 (goal_id is unique) — Supabase can
   // embed a to-one relation as either a single object or a one-item array
@@ -2592,6 +2611,10 @@ function checkAndCelebrate(g, key, streakValue, unitWord, muted){
     const milestoneKey = key + '_m' + streakValue;
     if(g.streakCelebrations[milestoneKey]) return;
     g.streakCelebrations[milestoneKey] = true;
+    // Still mark it as seen even while hidden, so unhiding the goal later
+    // doesn't suddenly replay a backlog of milestones it already passed
+    // quietly — hidden just means no pop-up, not "this didn't happen."
+    if(g.hidden) return;
     queueCelebration({ type:'milestone', num: streakValue, forceMuted: !!muted, unitWord, goalTitle: g.title });
     return;
   }
@@ -2603,6 +2626,7 @@ function checkAndCelebrate(g, key, streakValue, unitWord, muted){
   const randomKey = key + '_r' + streakValue;
   if(g.streakCelebrations[randomKey]) return;
   g.streakCelebrations[randomKey] = true;
+  if(g.hidden) return;
   queueCelebration({ type:'random', num: streakValue, forceMuted: !!muted, unitWord, goalTitle: g.title });
 }
 // Checks every enabled nutrition metric's current streak against the
@@ -2720,7 +2744,7 @@ function toggleNotifications(){
 // ---------------------------------------------------------------------
 // ROUTER (tiny hand-rolled view stack)
 // ---------------------------------------------------------------------
-function goHome(){ draft = null; render('dashboard'); }
+function goHome(){ draft = null; showHiddenGoals = false; render('dashboard'); }
 
 let lastRenderedView = null;
 function render(view, payload){
@@ -2801,6 +2825,16 @@ function renderNav(){
 // ---------------------------------------------------------------------
 // DASHBOARD
 // ---------------------------------------------------------------------
+let showHiddenGoals = false;
+function toggleShowHiddenGoals(){ showHiddenGoals = !showHiddenGoals; render('dashboard'); }
+function hiddenGoalsToggleHtml(hiddenGoals){
+  if(hiddenGoals.length === 0) return '';
+  const label = showHiddenGoals ? 'Hide them again' : `Show ${hiddenGoals.length} hidden goal${hiddenGoals.length===1?'':'s'}`;
+  return `
+    <button class="btn-text" style="display:block; margin: 4px auto 14px; font-size:13px;" onclick="toggleShowHiddenGoals()">${label}</button>
+    ${showHiddenGoals ? hiddenGoals.map(g => goalCardHtml(g)).join('') : ''}
+  `;
+}
 function viewDashboard(){
   const queuedCount = countAbsByStatus('queued');
   const sentCount = countAbsByStatus('awaiting') + countAbsByStatus('accepted');
@@ -2826,10 +2860,28 @@ function viewDashboard(){
       </div>
     `;
   }
-  const cards = goals.map(g => goalCardHtml(g)).join('');
+  // Hidden goals keep tracking normally — this only changes what shows up
+  // on your own dashboard. No badge, no graying-out on the ones that DO
+  // show; a hidden goal is either fully off-screen or fully back, nothing
+  // in between that would give away that something's being kept private.
+  const visibleGoals = goals.filter(g => !g.hidden);
+  const hiddenGoals = goals.filter(g => g.hidden);
+
+  if(visibleGoals.length === 0 && hiddenGoals.length > 0){
+    return `
+      ${digestBanner}
+      <div class="empty-state" style="text-align:center;">
+        <p>All your goals are currently hidden from this screen.</p>
+      </div>
+      ${hiddenGoalsToggleHtml(hiddenGoals)}
+      <button class="btn btn-ghost btn-block" onclick="startNewGoal()" style="margin-top:8px;">Add another goal</button>
+    `;
+  }
+  const cards = visibleGoals.map(g => goalCardHtml(g)).join('');
   return `
     ${digestBanner}
     ${cards}
+    ${hiddenGoalsToggleHtml(hiddenGoals)}
     <button class="btn btn-ghost btn-block" onclick="startNewGoal()" style="margin-top:8px;">Add another goal</button>
   `;
 }
@@ -3014,16 +3066,74 @@ function goalCardHtml(g){
             <span class="pct" style="${pct>=100?'color:var(--green-deep);':''}">${pct}%${pct>=100?' ✅':''}</span>
           </div>
         </div>
+        ${goalTimeBarHtml(g)}
       </div>
     </div>
   `;
 }
-function progressLabelText(g, pct){
-  const periodWord = g.category === 'nutrition' ? 'today'
+function periodWordFor(g){
+  return g.category === 'nutrition' ? 'today'
     : (g.metrics[0].periodLabel === 'day' ? 'today' : (g.metrics[0].periodLabel === 'month' ? 'this month' : (g.metrics[0].periodLabel === 'custom' ? 'this period' : 'this week')));
+}
+function progressLabelText(g, pct){
+  const periodWord = periodWordFor(g);
   return pct > 0 ? `Progress ${periodWord}` : `Nothing logged yet ${periodWord}`;
 }
 // ---------------------------------------------------------------------
+// TIME-REMAINING BAR — a second, thinner bar under the normal progress
+// bar showing how much of the CURRENT period is left before it expires:
+// midnight for daily goals, Sunday night for weekly, and (per the anchor
+// change above) the day before the goal's own creation-day anniversary
+// for monthly. Reuses getPeriodWindow so this always agrees with
+// whatever the streak/progress math already considers "this period" —
+// two different definitions of the same window would be a real trap.
+// Abstain goals are skipped entirely: there's no period to run out on,
+// just an ongoing streak with no natural "expires soon" moment.
+// ---------------------------------------------------------------------
+function goalTimeRemainingInfo(g){
+  const win = g.category === 'nutrition'
+    ? { start: todayKey(), end: todayKey() }
+    : getPeriodWindow(g, g.metrics[0]);
+  const periodStart = parseDateKey(win.start).getTime();
+  const periodEndExclusive = addDays(parseDateKey(win.end), 1).getTime(); // the true expiry moment: midnight AFTER the last full day
+  const now = Date.now();
+  const totalMs = periodEndExclusive - periodStart;
+  const remainingMs = Math.max(0, periodEndExclusive - now);
+  const fraction = totalMs > 0 ? Math.max(0, Math.min(1, remainingMs / totalMs)) : 0;
+  return { fraction, remainingMs, win };
+}
+function formatTimeRemaining(ms){
+  if(ms <= 0) return 'Expired';
+  const totalMins = Math.floor(ms / 60000);
+  const days = Math.floor(totalMins / 1440);
+  const hours = Math.floor((totalMins % 1440) / 60);
+  const mins = totalMins % 60;
+  if(days >= 1) return `${days}d ${hours}h left`;
+  if(hours >= 1) return `${hours}h ${mins}m left`;
+  return `${Math.max(1, mins)}m left`;
+}
+function goalTimeBarHtml(g){
+  if(g.category === 'withhold') return '';
+  const pct = goalProgressPct(g);
+  const periodWord = periodWordFor(g);
+  if(pct >= 100){
+    return `
+      <div class="time-remaining-wrap">
+        <div class="time-remaining-track"><div class="time-remaining-fill" style="width:100%; background:var(--green);"></div></div>
+        <div class="time-remaining-label" style="color:var(--green-deep);">✅ Done ${periodWord}</div>
+      </div>
+    `;
+  }
+  const info = goalTimeRemainingInfo(g);
+  const fractionPct = Math.round(info.fraction * 100);
+  const color = info.fraction <= 0.2 ? 'var(--danger)' : info.fraction <= 0.5 ? 'var(--c-fat)' : 'var(--green)';
+  return `
+    <div class="time-remaining-wrap">
+      <div class="time-remaining-track"><div class="time-remaining-fill" style="width:${fractionPct}%; background:${color};"></div></div>
+      <div class="time-remaining-label">⏳ ${formatTimeRemaining(info.remainingMs)}</div>
+    </div>
+  `;
+}
 // DATE / PERIOD HELPERS — local-timezone date math (per the "user's own
 // device timezone" decision). Used by both progress calculation and the
 // Log page itself.
@@ -3050,8 +3160,23 @@ function getPeriodWindow(goal, metric, refDateStr){
     return { start: dateKey(start), end: dateKey(addDays(start,6)) };
   }
   if(period === 'month'){
-    const start = new Date(refDate.getFullYear(), refDate.getMonth(), 1);
-    const end = new Date(refDate.getFullYear(), refDate.getMonth()+1, 0);
+    // Anchored to the goal's creation day, same anniversary-based philosophy
+    // as 'custom' periods below — created May 24 means every cycle runs the
+    // 24th through the 23rd, not the calendar's 1st-through-last-day. JS
+    // Date naturally rolls a too-high day into the next month for short
+    // months (created on the 31st lands on the 2nd/3rd in February) —
+    // accepted as reasonable default drift rather than clamped, matching
+    // how most billing-cycle-style "same day next month" logic works.
+    const anchor = new Date(goal.createdAt || Date.now());
+    const anchorDay = anchor.getDate();
+    let monthsSinceAnchor = (refDate.getFullYear() - anchor.getFullYear()) * 12 + (refDate.getMonth() - anchor.getMonth());
+    let start = new Date(anchor.getFullYear(), anchor.getMonth() + monthsSinceAnchor, anchorDay);
+    if(start > refDate){
+      monthsSinceAnchor -= 1;
+      start = new Date(anchor.getFullYear(), anchor.getMonth() + monthsSinceAnchor, anchorDay);
+    }
+    const nextStart = new Date(anchor.getFullYear(), anchor.getMonth() + monthsSinceAnchor + 1, anchorDay);
+    const end = addDays(nextStart, -1);
     return { start: dateKey(start), end: dateKey(end) };
   }
   if(period === 'custom'){
@@ -3370,10 +3495,32 @@ function goalStatsAbSectionHtml(g){
     ${metricAbRowsHtml(g.id, m.key)}
   `;
 }
+function goalHideToggleHtml(g){
+  return `
+    <div class="ab-person-row" style="margin-bottom:14px;">
+      <span>👁️ ${g.hidden ? 'Hidden from dashboard' : 'Hide from dashboard'}</span>
+      <label class="switch">
+        <input type="checkbox" ${g.hidden ? 'checked' : ''} onchange="toggleGoalHidden(${jsAttr(g.id)})">
+        <span class="track"></span>
+      </label>
+    </div>
+  `;
+}
+async function toggleGoalHidden(goalId){
+  const g = goals.find(x => x.id === goalId);
+  if(!g) return;
+  const newHidden = !g.hidden;
+  const { error } = await sbClient.from('goals').update({ hidden: newHidden }).eq('id', goalId);
+  if(error){ showToast("Couldn't update — " + error.message); return; }
+  g.hidden = newHidden;
+  showToast(newHidden ? 'Hidden from your dashboard' : 'Visible on your dashboard again');
+  openGoalStatsModal(goalId);
+}
 function goalStatsModalHtml(g){
   return `
     ${goalStatsHeaderHtml(g)}
     <div class="stat-modal-scroll">
+      ${goalHideToggleHtml(g)}
       ${goalStatsLogSectionHtml(g)}
       <div class="section-divider"></div>
       ${goalStatsStreakSectionHtml(g)}
