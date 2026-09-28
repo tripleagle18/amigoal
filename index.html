@@ -2878,8 +2878,10 @@ function viewDashboard(){
     `;
   }
   const cards = visibleGoals.map(g => goalCardHtml(g)).join('');
+  const hasTimeBarGoal = visibleGoals.some(g => g.category !== 'withhold');
   return `
     ${digestBanner}
+    ${hasTimeBarGoal ? tipCardHtml('time_bar', "That thin bar under your progress shows how much time's left before the goal's current period expires — it shifts from green to amber to red as the deadline gets close. Once you've hit the target, it switches to a simple \u2705 Done instead.") : ''}
     ${cards}
     ${hiddenGoalsToggleHtml(hiddenGoals)}
     <button class="btn btn-ghost btn-block" onclick="startNewGoal()" style="margin-top:8px;">Add another goal</button>
@@ -4320,6 +4322,7 @@ function viewStepsForm(){
             <button class="pill ${draft.period===p?'active':''}" onclick="setStepsPeriod('${p}')">${p==='day'?'Per day': p==='week'?'Per week': p==='month'?'Per month':'Custom period'}</button>
           `).join('')}
         </div>
+        ${draft.period === 'month' ? `<div class="hint">Resets on the same date each month as when you create this goal, not the calendar's 1st — e.g. created on the 24th means every cycle runs the 24th through the 23rd.</div>` : ''}
       </div>
 
       ${draft.period === 'custom' ? `
@@ -4397,6 +4400,7 @@ function viewCustomForm(){
             <button class="pill ${draft.period===p?'active':''}" onclick="setCustomPeriod('${p}')">${p==='day'?'Daily': p==='week'?'Weekly': p==='month'?'Monthly':'Custom period'}</button>
           `).join('')}
         </div>
+        ${draft.period === 'month' ? `<div class="hint">Resets on the same date each month as when you create this goal, not the calendar's 1st — e.g. created on the 24th means every cycle runs the 24th through the 23rd.</div>` : ''}
       </div>
 
       ${draft.period === 'custom' ? `
@@ -5605,6 +5609,7 @@ function newItemPeriodPickerHtml(includeDay){
         <option value="custom" ${d.periodLabel==='custom'?'selected':''}>Custom stretch</option>
       </select>
     </div>
+    ${d.periodLabel==='month' ? `<div class="hint">Resets on the same date each month as the challenge's start date, not the calendar's 1st.</div>` : ''}
     ${d.periodLabel==='custom' ? `
       <div class="field">
         <label>Days per period</label>
