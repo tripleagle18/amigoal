@@ -3279,8 +3279,65 @@ function periodTargetStreak(g, m, achievedInWindow){
 function nutritionMetricDailyValue(g, key, dateStr){
   return key === 'water' ? waterTotalOnDate(g, dateStr) : (foodTotalsOnDate(g, dateStr)[key] || 0);
 }
+// "Hit the target" for nutrition isn't a simple >= anymore — it's a real
+// range, asymmetric per macro. Protein and water reward going over (more
+// of either is generally fine, even good); calories, fat, and carbs
+// punish going over and are lenient about coming in under, since a mild
+// deficit on those is the normal/desired case far more often than not.
+// Below lower_bound OR above upper_bound both count as "not accomplished."
+const NUTRITION_TOLERANCE = {
+  protein:  { belowPct: 0.07, abovePct: 0.30 }, // 93%–130% of target
+  fat:      { belowPct: 0.30, abovePct: 0.07 }, // 70%–107% of target
+  calories: { belowPct: 0.30, abovePct: 0.07 }, // 70%–107% of target
+  carbs:    { belowPct: 0.30, abovePct: 0.07 }, // 70%–107% of target
+  water:    { belowPct: 0.07, abovePct: 0.60 }  // 93%–160% of target
+};
+function nutritionAccomplishedRange(key, target){
+  const tol = NUTRITION_TOLERANCE[key] || { belowPct: 0, abovePct: 0 };
+  return { lower: target * (1 - tol.belowPct), upper: target * (1 + tol.abovePct) };
+}
+function isNutritionMetricAccomplished(key, value, target){
+  if(target <= 0) return false;
+  const { lower, upper } = nutritionAccomplishedRange(key, target);
+  return value >= lower && value <= upper;
+}
+// Progress-bar percentage that stays CONSISTENT with the boolean check
+// above (hits exactly 100 exactly when isNutritionMetricAccomplished is
+// true, not before and not after) rather than a raw value/target ratio,
+// which would show 100% even when a macro is over its ceiling and
+// therefore not actually accomplished. Below the lower bound, scales
+// linearly from 0 up to 100 as you approach it. Above the upper bound,
+// scales back down from 100 toward 0 as you overshoot by up to one full
+// band-width past the ceiling — smooth and explainable rather than an
+// abrupt jump, while still landing exactly on 100 only inside the range.
+function nutritionMacroAccomplishmentPct(key, value, target){
+  if(target <= 0) return 0;
+  const { lower, upper } = nutritionAccomplishedRange(key, target);
+  if(value < lower) return Math.max(0, (value / lower) * 100);
+  if(value > upper){
+    const rangeWidth = upper - lower;
+    const overBy = value - upper;
+    return rangeWidth > 0 ? Math.max(0, 100 - (overBy / rangeWidth) * 100) : 0;
+  }
+  return 100;
+}
+// Same shape as dailyTargetStreak (count backward from today, an
+// in-progress today can extend but not break it) but checks the macro's
+// accomplished RANGE instead of a plain >= target.
+function nutritionDailyTargetStreak(getDayValue, createdAt, key, target){
+  if(target <= 0) return 0;
+  const earliest = createdAt ? dateKey(new Date(createdAt)) : todayKey();
+  let count = 0;
+  let cursor = addDays(new Date(), -1);
+  while(dateKey(cursor) >= earliest){
+    if(isNutritionMetricAccomplished(key, getDayValue(dateKey(cursor)), target)){ count++; cursor = addDays(cursor, -1); }
+    else break;
+  }
+  if(isNutritionMetricAccomplished(key, getDayValue(todayKey()), target)) count++;
+  return count;
+}
 function nutritionMetricStreak(g, m){
-  return dailyTargetStreak(date => nutritionMetricDailyValue(g, m.key, date), g.createdAt, parseFloat(m.value) || 0);
+  return nutritionDailyTargetStreak(date => nutritionMetricDailyValue(g, m.key, date), g.createdAt, m.key, parseFloat(m.value) || 0);
 }
 // Best current streak among a nutrition goal's enabled metrics — used as
 // the one-line dashboard headline, since a card can't show five numbers.
@@ -3353,8 +3410,22 @@ function longestPeriodTargetStreak(g, m, achievedInWindow){
   }
   return best;
 }
+// Full-history-scan counterpart to nutritionDailyTargetStreak, same
+// relationship longestDailyTargetStreak has to dailyTargetStreak.
+function longestNutritionDailyTargetStreak(getDayValue, createdAt, key, target){
+  if(target <= 0) return 0;
+  const endKey = todayKey();
+  let cursor = createdAt ? new Date(createdAt) : new Date();
+  let best = 0, running = 0;
+  while(dateKey(cursor) <= endKey){
+    if(isNutritionMetricAccomplished(key, getDayValue(dateKey(cursor)), target)){ running++; if(running > best) best = running; }
+    else running = 0;
+    cursor = addDays(cursor, 1);
+  }
+  return best;
+}
 function longestNutritionMetricStreak(g, m){
-  return longestDailyTargetStreak(date => nutritionMetricDailyValue(g, m.key, date), g.createdAt, parseFloat(m.value) || 0);
+  return longestNutritionDailyTargetStreak(date => nutritionMetricDailyValue(g, m.key, date), g.createdAt, m.key, parseFloat(m.value) || 0);
 }
 function longestStepsStreak(g){
   const m = g.metrics[0];
@@ -3580,7 +3651,7 @@ function goalProgressPct(g){
       const val = m.key === 'water' ? water : (totals[m.key]||0);
       const target = parseFloat(m.value)||0;
       if(target <= 0) return;
-      sum += Math.min(100, (val/target)*100);
+      sum += nutritionMacroAccomplishmentPct(m.key, val, target);
       count++;
     });
     return count ? Math.round(sum/count) : 0;
