@@ -131,6 +131,14 @@
   .ring-complete{ animation: ring-pulse .5s ease; }
 
   /* ---------- Dashboard ---------- */
+  .boot-spinner{
+    width: 36px; height: 36px;
+    border: 3px solid var(--line);
+    border-top-color: var(--green);
+    border-radius: 50%;
+    animation: boot-spin 0.8s linear infinite;
+  }
+  @keyframes boot-spin{ to { transform: rotate(360deg); } }
   .empty-state{
     background: var(--card);
     border: 1px solid var(--line);
@@ -1175,7 +1183,7 @@
     padding:0; border-radius:0; box-shadow:none; background:#000;
   }
   .celebration-video-wrap.fullscreen{ width:100%; height:100%; border-radius:0; }
-  .celebration-video-wrap.fullscreen video{ height:100%; object-fit:cover; }
+  .celebration-video-wrap.fullscreen video{ height:100%; object-fit:contain; }
   .celebration-video-wrap.fullscreen .celebration-close-btn{ top:44px; }
   .celebration-video-wrap.fullscreen .celebration-banner-top{ padding-top:44px; }
   .celebration-video-wrap.fullscreen .celebration-banner-bottom{ bottom:92px; }
@@ -2375,9 +2383,11 @@ function celebrateStreak(opts){
   // used for confirm dialogs, which left visible backdrop on every side
   // even on a phone screen. The floating share button overlays the video
   // near the bottom rather than pushing it below, so the video itself
-  // still fills the whole screen. object-fit:cover crops to fill rather
-  // than letterboxing, which looks right as long as source clips are shot
-  // roughly phone-portrait — worth knowing if a clip looks over-cropped.
+  // still fills the whole screen. object-fit:contain (matching the splash
+  // video) rather than cover — real uploaded clips aren't reliably shot
+  // in phone-portrait, and cover was cropping visible text/content off
+  // the edges. contain can letterbox with black bars instead, which is
+  // the safer tradeoff for clips that matter being fully readable.
   overlay.classList.toggle('video-mode', !!videoSrc);
   card.classList.toggle('video-mode', !!videoSrc);
   card.innerHTML = videoSrc ? `
@@ -6490,7 +6500,21 @@ function handleLogout(){
 // INIT
 // ---------------------------------------------------------------------
 renderBell();
-render('dashboard');
+// NOT render('dashboard') here — that renders viewDashboard() with
+// `goals` still at its empty initial value, since the real data hasn't
+// loaded yet. For a returning user (splash already seen, so nothing else
+// covers the screen), that showed the "add your first goal" empty state
+// for a few real seconds every single login before flipping to their
+// actual goals — a genuine flash of wrong content, not a display quirk.
+// A neutral loading placeholder here, replaced by the real render once
+// checkAuthAndProceed() -> proceedAfterAuth() actually has the data (or
+// decides there's no session and shows the login screen instead), fixes
+// it without touching the splash-video path at all.
+document.getElementById('app').innerHTML = `
+  <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding-top:140px;">
+    <div class="boot-spinner"></div>
+  </div>
+`;
 maybeShowSplashVideo();
 document.addEventListener('click', function(e){
   const panel = document.getElementById('notif-panel');
